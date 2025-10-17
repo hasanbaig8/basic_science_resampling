@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { getCompletionsFromVLLM, formatPrompt, type CompletionChoice } from "@/lib/vllm-api";
-import { Loader2, Sparkles, ChevronRight } from "lucide-react";
+import { Loader2, Sparkles, ChevronRight, Edit2, Save, X } from "lucide-react";
 
 interface CompletionStep {
   text: string;
@@ -23,6 +23,10 @@ function App() {
   const [completionSteps, setCompletionSteps] = useState<CompletionStep[]>([]);
   const [currentChoices, setCurrentChoices] = useState<CompletionChoice[]>([]);
   const [isSelectingFromChoices, setIsSelectingFromChoices] = useState(false);
+
+  // Editing state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedText, setEditedText] = useState("");
 
   const getCurrentText = () => {
     if (completionSteps.length === 0) return "";
@@ -107,6 +111,54 @@ function App() {
     setCurrentChoices([]);
     setIsSelectingFromChoices(false);
     setError(null);
+    setIsEditing(false);
+    setEditedText("");
+  };
+
+  const startEditing = () => {
+    setEditedText(getCurrentText());
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setIsEditing(false);
+    setEditedText("");
+  };
+
+  const saveEdits = () => {
+    // Clear existing steps and create a single step with edited text
+    setCompletionSteps([{
+      text: editedText,
+      choices: [],
+      selectedIndex: 0
+    }]);
+    setIsEditing(false);
+    setEditedText("");
+  };
+
+  const generateFromEdited = async () => {
+    setIsGenerating(true);
+    setError(null);
+    setIsSelectingFromChoices(false);
+
+    try {
+      // Use edited text as the continuation point
+      const fullPrompt = formatPrompt(prompt) + editedText;
+
+      const choices = await getCompletionsFromVLLM(
+        fullPrompt,
+        maxTokens,
+        temperature,
+        10
+      );
+
+      setCurrentChoices(choices);
+      setIsSelectingFromChoices(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate completions");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -201,36 +253,103 @@ function App() {
                 <CardHeader>
                   <CardTitle>Generated Text</CardTitle>
                   <CardDescription>
-                    {completionSteps.length} step{completionSteps.length !== 1 ? "s" : ""} completed
+                    {isEditing
+                      ? "Editing mode - make your changes below"
+                      : `${completionSteps.length} step${completionSteps.length !== 1 ? "s" : ""} completed`
+                    }
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    <div className="p-4 bg-muted rounded-lg max-h-96 overflow-y-auto">
-                      <p className="text-sm text-muted-foreground mb-2 font-mono">
-                        {formatPrompt(prompt)}
-                      </p>
-                      {completionSteps.map((step, idx) => (
-                        <div key={idx} className="relative group">
-                          <span className="text-sm font-mono bg-blue-100 dark:bg-blue-900/30 px-1 rounded">
-                            {step.text}
-                          </span>
-                          <Badge variant="outline" className="ml-2 text-xs">
-                            Step {idx + 1}
-                          </Badge>
+                    {isEditing ? (
+                      // Edit mode: show textarea
+                      <div className="space-y-2">
+                        <Textarea
+                          value={editedText}
+                          onChange={(e) => setEditedText(e.target.value)}
+                          rows={15}
+                          className="font-mono text-sm"
+                          placeholder="Edit the assistant response here..."
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            onClick={saveEdits}
+                            size="sm"
+                            className="flex-1"
+                          >
+                            <Save className="w-4 h-4 mr-2" />
+                            Save Changes
+                          </Button>
+                          <Button
+                            onClick={cancelEditing}
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                          >
+                            <X className="w-4 h-4 mr-2" />
+                            Cancel
+                          </Button>
                         </div>
-                      ))}
-                    </div>
+                        <Button
+                          onClick={generateFromEdited}
+                          disabled={isGenerating || !editedText.trim()}
+                          size="sm"
+                          className="w-full"
+                        >
+                          {isGenerating ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <ChevronRight className="w-4 h-4 mr-2" />
+                              Generate from Edited Text
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    ) : (
+                      // View mode: show completed text
+                      <>
+                        <div className="p-4 bg-muted rounded-lg max-h-96 overflow-y-auto">
+                          <p className="text-sm text-muted-foreground mb-2 font-mono">
+                            {formatPrompt(prompt)}
+                          </p>
+                          {completionSteps.map((step, idx) => (
+                            <div key={idx} className="relative group">
+                              <span className="text-sm font-mono bg-blue-100 dark:bg-blue-900/30 px-1 rounded">
+                                {step.text}
+                              </span>
+                              <Badge variant="outline" className="ml-2 text-xs">
+                                Step {idx + 1}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
 
-                    <Button
-                      onClick={() => generateCompletions(true)}
-                      disabled={isGenerating}
-                      size="sm"
-                      className="w-full"
-                    >
-                      <ChevronRight className="w-4 h-4 mr-2" />
-                      Continue Generation
-                    </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            onClick={() => generateCompletions(true)}
+                            disabled={isGenerating}
+                            size="sm"
+                            className="flex-1"
+                          >
+                            <ChevronRight className="w-4 h-4 mr-2" />
+                            Continue Generation
+                          </Button>
+                          <Button
+                            onClick={startEditing}
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                          >
+                            <Edit2 className="w-4 h-4 mr-2" />
+                            Edit Text
+                          </Button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </CardContent>
               </Card>
