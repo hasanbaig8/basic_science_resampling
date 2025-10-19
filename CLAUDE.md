@@ -59,25 +59,28 @@ jupyter notebook
 
 ### Using the Pipeline (Recommended)
 
-The new pipeline architecture is designed for interactive experiments in Jupyter notebooks:
+The pipeline architecture is designed for running intervention experiments:
 
 ```python
 from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
+from pipeline.intervention_inserter import DirectInsertionStrategy
 from pipeline.analysis_utils import compute_statistics, test_significance
 
-# Initialize
+# Initialize components
 generator = RolloutGenerator()
-inserter = InterventionInserter()
 parser = DecisionParser()
+
+# Create intervention strategy with desired position
+strategy = DirectInsertionStrategy(position_pct=0.5)
+inserter = InterventionInserter(strategy=strategy)
 
 # Generate rollouts
 rollouts = generator.generate_from_question("Is the sky blue?", n=10)
 
-# Apply intervention
+# Apply intervention (position configured in strategy)
 intervened = inserter.apply(
     rollout=rollouts[0],
-    intervention_text="Actually, the opposite is true.",
-    position_pct=0.5
+    intervention_text="Actually, the opposite is true."
 )
 
 # Continue generation
@@ -90,9 +93,10 @@ intervention_decisions = parser.parse_multiple(continued)
 result = test_significance(control_decisions, intervention_decisions)
 ```
 
-**See `example_experiment.ipynb` for a complete walkthrough!**
-
-**Documentation**: `pipeline/README.md` contains comprehensive API reference and usage patterns.
+**Key Examples**:
+- `example_experiment.ipynb` - Complete walkthrough of a single experiment
+- `experiments/1_1_dumb_tf_25_50_75.py` - Batch experiment across multiple questions/positions
+- `pipeline/README.md` - Comprehensive API reference
 
 ### Dataset Loading
 

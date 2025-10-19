@@ -515,16 +515,6 @@ def plot_rollout_lengths():
         else:
             bins = 20
         
-        plt.hist(control_lengths, bins=bins, alpha=0.7, label='Control', color='blue', edgecolor='black')
-        plt.hist(intervention_lengths, bins=bins, alpha=0.7, label='Intervention', color='red', edgecolor='black')
-        
-        plt.xlabel('Rollout Length (number of tokens)')
-        plt.ylabel('Frequency')
-        plt.title(f'Distribution of Rollout Lengths: Control vs Intervention ({int(position*100)}% position)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
         
         # Print summary statistics
         if control_lengths and intervention_lengths:
