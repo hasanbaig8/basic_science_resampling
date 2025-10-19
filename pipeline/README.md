@@ -48,11 +48,11 @@ vllm serve Qwen/Qwen3-8b --port 8000
 
 ```python
 from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
+from pipeline.intervention_inserter import DirectInsertionStrategy
 from pipeline.analysis_utils import compute_statistics, test_significance
 
 # Initialize components
 generator = RolloutGenerator()
-inserter = InterventionInserter()
 parser = DecisionParser()
 
 # 1. Generate initial rollouts from a question
@@ -64,15 +64,18 @@ control_decisions = parser.parse_multiple(rollouts)
 control_stats = compute_statistics(control_decisions)
 print(f"Control: {control_stats['percent_true']*100:.1f}% True")
 
-# 3. Apply intervention to first rollout
+# 3. Create intervention strategy and inserter
 intervention_text = "Wait no, the answer is obviously true. I should just return True."
-intervened = inserter.clip_and_insert(
+strategy = DirectInsertionStrategy(position_pct=0.5)  # Insert halfway through reasoning
+inserter = InterventionInserter(strategy=strategy)
+
+# 4. Apply intervention to first rollout
+intervened = inserter.apply(
     rollout=rollouts[0],
-    intervention_text=intervention_text,
-    position_pct=0.5  # Insert halfway through reasoning
+    intervention_text=intervention_text
 )
 
-# 4. Continue generation after intervention
+# 5. Continue generation after intervention
 formatted_prompt = generator.format_question_prompt(question)
 continued_rollouts = generator.continue_generation(
     formatted_prompt=formatted_prompt,
@@ -80,12 +83,12 @@ continued_rollouts = generator.continue_generation(
     n=10
 )
 
-# 5. Parse intervention decisions
+# 6. Parse intervention decisions
 intervention_decisions = parser.parse_multiple(continued_rollouts)
 intervention_stats = compute_statistics(intervention_decisions)
 print(f"Intervention: {intervention_stats['percent_true']*100:.1f}% True")
 
-# 6. Test significance
+# 7. Test significance
 result = test_significance(control_decisions, intervention_decisions)
 print(result['interpretation'])
 ```
@@ -130,44 +133,64 @@ completions = generator.generate(prompt, n=10, format_as_question=False)
 
 ### InterventionInserter
 
-Clips rollouts and inserts intervention text.
+Clips rollouts and inserts intervention text using a pluggable strategy pattern.
 
 ```python
-inserter = InterventionInserter()
+from pipeline.intervention_inserter import DirectInsertionStrategy
 
-# Clip at 50% and insert text
-intervened = inserter.clip_and_insert(
+# Create a strategy with desired configuration
+strategy = DirectInsertionStrategy(position_pct=0.5)
+inserter = InterventionInserter(strategy=strategy)
+
+# Clip and insert text (position is configured in strategy)
+intervened = inserter.apply(
     rollout="<think>Original reasoning here...</think>",
-    intervention_text="Let me reconsider this carefully.",
-    position_pct=0.5
+    intervention_text="Let me reconsider this carefully."
 )
 
 # Result: "<think>Original reaso\n\nLet me reconsider this carefully.\n"
 # Note: Returns with open <think> tag for continuation
 ```
 
-**Position Guidelines**:
+**DirectInsertionStrategy Position Guidelines**:
 - `position_pct=0.25` - Early intervention (first quarter)
 - `position_pct=0.5` - Mid intervention (halfway)
 - `position_pct=0.75` - Late intervention (final quarter)
 
 **Extensibility**:
 
-Add custom intervention strategies by subclassing `InterventionStrategy`:
+Add custom intervention strategies by subclassing `InterventionStrategy`. Each strategy can have its own configuration parameters set during initialization:
 
 ```python
 from pipeline.intervention_inserter import InterventionStrategy
 
-class ParaphrasingStrategy(InterventionStrategy):
-    def apply(self, rollout, intervention_text, position_pct):
-        # Custom logic here
-        paraphrased = paraphrase_with_context(intervention_text, rollout)
-        # ... clip and insert
-        return result
+class SemanticBoundaryStrategy(InterventionStrategy):
+    def __init__(self, boundary_type="sentence"):
+        """Insert at semantic boundaries rather than arbitrary positions."""
+        self.boundary_type = boundary_type
+    
+    def apply(self, rollout, intervention_text):
+        # Extract content
+        match = re.search(r'<think>(.*?)</think>', rollout, re.DOTALL)
+        content = match.group(1) if match else rollout
+        
+        # Find semantic boundary (e.g., end of sentence)
+        if self.boundary_type == "sentence":
+            boundary = content.rfind(". ") + 2
+        else:
+            boundary = len(content) // 2
+        
+        # Insert at boundary
+        clipped = content[:boundary]
+        result = clipped + "\n\n" + intervention_text
+        return f"<think>\n{result}\n"
 
 # Use custom strategy
-inserter = InterventionInserter(strategy=ParaphrasingStrategy())
+strategy = SemanticBoundaryStrategy(boundary_type="sentence")
+inserter = InterventionInserter(strategy=strategy)
 ```
+
+**Key Design Principle**: Strategy-specific parameters (like position, patterns, boundaries) are configured at initialization, not passed to `apply()`. This keeps the interface clean and consistent across all strategies.
 
 ### DecisionParser
 
@@ -257,15 +280,17 @@ control_rollouts = generator.generate_from_question(question, n=10)
 
 ```python
 from pipeline import InterventionInserter
+from pipeline.intervention_inserter import DirectInsertionStrategy
 
-inserter = InterventionInserter()
+# Create strategy with desired position
+strategy = DirectInsertionStrategy(position_pct=0.5)
+inserter = InterventionInserter(strategy=strategy)
+
 intervened_rollouts = []
-
 for rollout in control_rollouts:
-    intervened = inserter.clip_and_insert(
+    intervened = inserter.apply(
         rollout=rollout,
-        intervention_text="Actually, the opposite is true.",
-        position_pct=0.5
+        intervention_text="Actually, the opposite is true."
     )
     intervened_rollouts.append(intervened)
 ```
@@ -345,11 +370,14 @@ generator = RolloutGenerator(
     temperature=0.9
 )
 
-# Custom intervention strategy
+# Custom intervention strategy with specific position
 from pipeline.intervention_inserter import DirectInsertionStrategy
 
-custom_strategy = DirectInsertionStrategy()
+custom_strategy = DirectInsertionStrategy(position_pct=0.75)  # Late intervention
 inserter = InterventionInserter(strategy=custom_strategy)
+
+# Or use default strategy (position_pct=0.5)
+inserter_default = InterventionInserter()
 
 # Parser (no configuration needed)
 parser = DecisionParser()
@@ -359,23 +387,30 @@ parser = DecisionParser()
 
 ### Adding New Intervention Strategies
 
-The easiest way to extend the pipeline is by adding new intervention strategies:
+The easiest way to extend the pipeline is by adding new intervention strategies. Each strategy can have its own configuration:
 
 ```python
 from pipeline.intervention_inserter import InterventionStrategy
 import re
 
 class ContextualParaphrasingStrategy(InterventionStrategy):
-    def __init__(self, paraphraser):
+    def __init__(self, paraphraser, position_pct=0.5):
+        """Strategy that paraphrases based on context.
+        
+        Args:
+            paraphraser: Function that takes (text, context) and returns paraphrased text
+            position_pct: Where to clip before paraphrasing
+        """
         self.paraphraser = paraphraser
+        self.position_pct = position_pct
 
-    def apply(self, rollout, intervention_text, position_pct):
+    def apply(self, rollout, intervention_text):
         # Extract context
         match = re.search(r'<think>(.*?)</think>', rollout, re.DOTALL)
         context = match.group(1) if match else rollout
 
-        # Clip
-        clip_pos = int(len(context) * position_pct)
+        # Clip at configured position
+        clip_pos = int(len(context) * self.position_pct)
         clipped = context[:clip_pos]
 
         # Paraphrase based on context
@@ -386,7 +421,8 @@ class ContextualParaphrasingStrategy(InterventionStrategy):
         return f"<think>\n{result}\n"
 
 # Use it
-inserter = InterventionInserter(strategy=ContextualParaphrasingStrategy(my_paraphraser))
+strategy = ContextualParaphrasingStrategy(my_paraphraser, position_pct=0.6)
+inserter = InterventionInserter(strategy=strategy)
 ```
 
 ## Tips

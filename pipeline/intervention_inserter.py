@@ -16,21 +16,28 @@ class InterventionStrategy(ABC):
     Abstract base class for intervention strategies.
 
     This allows for easy extension with different intervention approaches
-    (e.g., paraphrasing, contextual insertion, etc.)
+    (e.g., paraphrasing, contextual insertion, semantic boundary insertion, etc.)
+
+    Strategy-specific parameters (like position, patterns, etc.) should be
+    configured in the strategy's __init__() method, not passed to apply().
     """
 
     @abstractmethod
-    def apply(self, rollout: str, intervention_text: str, position_pct: float) -> str:
+    def apply(self, rollout: str, intervention_text: str) -> str:
         """
         Apply the intervention to a rollout.
 
         Args:
             rollout: The original rollout text (may include <think> tags)
             intervention_text: Text to insert
-            position_pct: Where to clip and insert (0.0-1.0)
 
         Returns:
             Modified text ready for continuation (with open <think> tag if applicable)
+
+        Note:
+            Strategy-specific parameters should be set during initialization,
+            not passed to this method. This keeps the interface consistent
+            across all strategies.
         """
         pass
 
@@ -40,9 +47,26 @@ class DirectInsertionStrategy(InterventionStrategy):
     Simple strategy: clip at position and insert text directly.
 
     This is the baseline intervention approach.
+
+    Args:
+        position_pct: Position to clip at (0.0-1.0). Default 0.5 (halfway).
     """
 
-    def apply(self, rollout: str, intervention_text: str, position_pct: float) -> str:
+    def __init__(self, position_pct: float = 0.5):
+        """
+        Initialize DirectInsertionStrategy.
+
+        Args:
+            position_pct: Position to clip at (0.0-1.0, where 0.5=halfway)
+
+        Raises:
+            ValueError: If position_pct is not in valid range
+        """
+        if not 0.0 <= position_pct <= 1.0:
+            raise ValueError(f"position_pct must be between 0.0 and 1.0, got {position_pct}")
+        self.position_pct = position_pct
+
+    def apply(self, rollout: str, intervention_text: str) -> str:
         """
         Clip rollout and insert intervention text.
 
@@ -52,14 +76,10 @@ class DirectInsertionStrategy(InterventionStrategy):
         Args:
             rollout: The original rollout text
             intervention_text: Text to insert after clipping
-            position_pct: Position to clip at (0.0-1.0)
 
         Returns:
             Clipped text with intervention inserted, ending with open <think> tag
         """
-        if not 0.0 <= position_pct <= 1.0:
-            raise ValueError(f"position_pct must be between 0.0 and 1.0, got {position_pct}")
-
         # Try to extract <think> content
         think_content = self._extract_think_content(rollout)
 
@@ -71,7 +91,7 @@ class DirectInsertionStrategy(InterventionStrategy):
             text_to_clip = rollout
 
         # Calculate clip position by character count
-        clip_position = int(len(text_to_clip) * position_pct)
+        clip_position = int(len(text_to_clip) * self.position_pct)
         clipped_text = text_to_clip[:clip_position]
 
         # Add intervention text with formatting
@@ -112,35 +132,34 @@ class InterventionInserter:
         """
         self.strategy = strategy if strategy is not None else DirectInsertionStrategy()
 
-    def clip_and_insert(
+    def apply(
         self,
         rollout: str,
-        intervention_text: str,
-        position_pct: float = 0.5
+        intervention_text: str
     ) -> str:
         """
-        Clip a rollout and insert intervention text.
+        Clip a rollout and insert intervention text using the configured strategy.
 
         Args:
             rollout: The original rollout text
             intervention_text: Text to insert after clipping
-            position_pct: Position to clip at (0.0 = start, 1.0 = end)
 
         Returns:
             Modified rollout ready for continuation
 
-        Raises:
-            ValueError: If position_pct is not in valid range
+        Note:
+            Strategy-specific parameters (like position) should be configured
+            when creating the strategy instance, not passed here.
 
         Example:
-            >>> inserter = InterventionInserter()
-            >>> result = inserter.clip_and_insert(
+            >>> strategy = DirectInsertionStrategy(position_pct=0.5)
+            >>> inserter = InterventionInserter(strategy=strategy)
+            >>> result = inserter.apply(
             ...     rollout="<think>Let me think... maybe yes...</think>",
-            ...     intervention_text="Wait, let me reconsider.",
-            ...     position_pct=0.5
+            ...     intervention_text="Wait, let me reconsider."
             ... )
         """
-        return self.strategy.apply(rollout, intervention_text, position_pct)
+        return self.strategy.apply(rollout, intervention_text)
 
     def set_strategy(self, strategy: InterventionStrategy):
         """

@@ -74,7 +74,7 @@ parser = DecisionParser()
 rollouts = generator.generate_from_question("Is the sky blue?", n=10)
 
 # Apply intervention
-intervened = inserter.clip_and_insert(
+intervened = inserter.apply(
     rollout=rollouts[0],
     intervention_text="Actually, the opposite is true.",
     position_pct=0.5
@@ -134,7 +134,7 @@ Clips rollouts and inserts intervention text.
 ```python
 inserter = InterventionInserter()
 
-intervened = inserter.clip_and_insert(
+intervened = inserter.apply(
     rollout="<think>Original reasoning...</think>",
     intervention_text="Wait, let me reconsider.",
     position_pct=0.5  # 0.0-1.0, where 0.5 = halfway

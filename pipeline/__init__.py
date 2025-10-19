@@ -20,7 +20,7 @@ Example usage:
     >>>
     >>> # Apply intervention
     >>> inserter = InterventionInserter()
-    >>> intervened = inserter.clip_and_insert(
+    >>> intervened = inserter.apply(
     ...     rollouts[0],
     ...     "Wait, let me reconsider.",
     ...     position_pct=0.5

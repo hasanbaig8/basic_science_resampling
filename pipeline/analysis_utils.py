@@ -201,6 +201,20 @@ def _two_proportion_z_test(control: List[bool], intervention: List[bool]) -> Opt
 
     return p_value
 
+def convert_to_native_types(obj):
+    """Recursively convert numpy types to native Python types."""
+    if isinstance(obj, dict):
+        return {key: convert_to_native_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native_types(item) for item in obj]
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, np.ndarray):
+        return convert_to_native_types(obj.tolist())
+    else:
+        return obj
 
 def _chi2_test(control: List[bool], intervention: List[bool]) -> Optional[float]:
     """
