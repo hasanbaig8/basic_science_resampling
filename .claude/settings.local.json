@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "WebFetch(domain:doc-04-b0-docstext.googleusercontent.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

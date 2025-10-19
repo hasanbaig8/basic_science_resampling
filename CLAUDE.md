@@ -4,156 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository explores the basic science of Chain-of-Thought (CoT) interventions in LLMs through interactive completion steering. The project consists of two main components:
+This repository explores the basic science of Chain-of-Thought (CoT) interventions in LLMs, specifically studying how injecting text at different positions during reasoning affects model outputs. The main focus is on **StrategyQA question answering** with systematic intervention experiments.
 
-1. **Completion Steerer UI** - A React-based interactive interface for manually steering LLM outputs by choosing from multiple completion candidates at each generation step
-2. **Steering Vector Selector** - A Python tool for automatically selecting completions that maximize activation along emotion-based steering vectors
+### Core Components
+
+The project uses a clean, modular **pipeline architecture** (`pipeline/` directory):
+
+1. **RolloutGenerator** - Generate completions using vLLM (unified for initial generation and continuation)
+2. **InterventionInserter** - Clip reasoning traces and inject intervention text
+3. **DecisionParser** - Extract boolean decisions from model outputs
+4. **analysis_utils** - Statistical analysis and significance testing
+
+All components are designed for interactive use in Jupyter notebooks.
 
 ## Development Setup
 
 ### Python Environment
 
-The project uses a Python virtual environment with extensive ML dependencies including PyTorch, transformers, vLLM, and nnsight.
+The project uses a Python virtual environment with ML dependencies including PyTorch, transformers, vLLM, and nnsight.
 
 ```bash
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install dependencies
+# Install dependencies (if needed)
 pip install -r requirements.txt
 ```
 
 ### vLLM Server
 
-Most experiments require a running vLLM server. The default configuration expects:
-- **Server URL**: `http://localhost:8000`
-- **Model**: Qwen/Qwen3-8b for generation (some scripts use Qwen/Qwen3-0.6b or Qwen/Qwen3-4b for embeddings)
-- **Port**: 8000
+**Critical**: All experiments require a running vLLM server.
 
-Start the server:
 ```bash
+# Start vLLM server (default configuration)
 vllm serve Qwen/Qwen3-8b --port 8000
 ```
 
-### Completion Steerer UI
+Default configuration:
+- **Model**: Qwen/Qwen3-8b (8B parameter model)
+- **Server URL**: `http://localhost:8000`
+- **Endpoints**: Uses `/v1/completions` endpoint
 
-The UI is a Vite + React + TypeScript application located in `completion-steerer/`.
-
-```bash
-cd completion-steerer
-
-# Install dependencies
-npm install
-
-# Start development server (runs on localhost:5173)
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
-
-# Lint code
-npm run lint
-```
-
-## Key Components
-
-### Completion Steerer UI (`completion-steerer/`)
-
-**Purpose**: Interactive interface for manually steering LLM generation by selecting from 10 completion candidates at each step.
-
-**Architecture**:
-- `src/App.tsx` - Main application component with state management for multi-step completion selection
-- `src/lib/vllm-api.ts` - API integration with vLLM server at `localhost:8000`
-- `src/lib/utils.ts` - Utility functions
-- `src/components/ui/` - shadcn/ui components (Button, Card, Textarea, Badge)
-
-**Key Features**:
-- Generates 10 completion options per step using vLLM's `n=10` parameter
-- Uses Qwen3 chat template formatting: `<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n`
-- Supports "time travel" - change any previous selection and continue from that branch
-- Edit mode - manually edit generated text and continue generation from edited state
-- Step history tracking with alternative choice visualization
-
-**API Format** (vllm-api.ts:21-30):
-```typescript
-{
-  model: "Qwen/Qwen3-8b",
-  prompt: formatPrompt(userPrompt) + previousText,
-  max_tokens: 50,
-  temperature: 0.7,
-  n: 10
-}
-```
-
-### Steering Vector Selector (`completion-steerer/steering_selector.py`)
-
-**Purpose**: Automatically select completions that maximize activation along emotion-based steering vectors (angry vs neutral).
-
-**Architecture**:
-- Uses layer 15 embeddings from Qwen3-4b for computing steering scores
-- Generates completions via vLLM server (Qwen3-8b)
-- Computes steering vector as `angry_vector - neutral_vector` from emotion examples
-- Scores each completion by projection onto steering direction
-
-**Usage**:
-```bash
-python completion-steerer/steering_selector.py \
-  --prompt "What are the most common emotions?" \
-  --max-tokens 100 \
-  --temperature 0.7 \
-  --n 10 \
-  --layer 15 \
-  --embedding-model "Qwen/Qwen3-4b" \
-  --vllm-model "Qwen/Qwen3-8b"
-```
-
-**Key Methods** (steering_selector.py):
-- `_get_embedding()` - Extract normalized mean-pooled embeddings from specified layer
-- `compute_steering_scores()` - Project embeddings onto steering vector
-- `select_best_completion()` - Generate n completions and return highest-scoring one
-
-**Dependencies**:
-- Requires `emotion_examples.json` at `/workspace/basic_science_resampling/emotion_examples.json`
-- Contains pre-computed angry and neutral emotion examples for steering vector computation
-
-### Initial Exploration (`initial_rough/`)
-
-Contains early experimental notebooks and scripts:
-- `steering_demo.ipynb` - Demonstrations of steering concepts
-- `mvp.ipynb` - Minimum viable product explorations
-- `create_emotion_dataset.py` / `generate_emotion_dataset_from_vllm.py` - Dataset generation scripts
-- `emotion_examples.json` / `emotion_score_results.json` - Generated emotion datasets
-
-## Common Workflows
-
-### Running the Interactive Steerer
-
-1. Start vLLM server in one terminal:
-   ```bash
-   vllm serve Qwen/Qwen3-8b --port 8000
-   ```
-
-2. Start the UI in another terminal:
-   ```bash
-   cd completion-steerer
-   npm run dev
-   ```
-
-3. Open browser to `http://localhost:5173`
-4. Enter a prompt, adjust parameters, and interactively steer the generation
-
-### Using Automatic Steering Selection
-
-1. Ensure vLLM server is running
-2. Run the steering selector:
-   ```bash
-   python completion-steerer/steering_selector.py --prompt "Your prompt here"
-   ```
-
-### Working with Jupyter Notebooks
+### Jupyter Notebooks
 
 ```bash
 # Activate environment
@@ -161,44 +53,261 @@ source .venv/bin/activate
 
 # Start Jupyter
 jupyter notebook
-
-# Navigate to initial_rough/ for exploration notebooks
 ```
+
+## Quick Start
+
+### Using the Pipeline (Recommended)
+
+The new pipeline architecture is designed for interactive experiments in Jupyter notebooks:
+
+```python
+from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
+from pipeline.analysis_utils import compute_statistics, test_significance
+
+# Initialize
+generator = RolloutGenerator()
+inserter = InterventionInserter()
+parser = DecisionParser()
+
+# Generate rollouts
+rollouts = generator.generate_from_question("Is the sky blue?", n=10)
+
+# Apply intervention
+intervened = inserter.clip_and_insert(
+    rollout=rollouts[0],
+    intervention_text="Actually, the opposite is true.",
+    position_pct=0.5
+)
+
+# Continue generation
+prompt = generator.format_question_prompt("Is the sky blue?")
+continued = generator.continue_generation(prompt, intervened, n=10)
+
+# Analyze
+control_decisions = parser.parse_multiple(rollouts)
+intervention_decisions = parser.parse_multiple(continued)
+result = test_significance(control_decisions, intervention_decisions)
+```
+
+**See `example_experiment.ipynb` for a complete walkthrough!**
+
+**Documentation**: `pipeline/README.md` contains comprehensive API reference and usage patterns.
+
+### Dataset Loading
+
+Load StrategyQA dataset from HuggingFace:
+
+```bash
+python load_dataset.py
+```
+
+Creates `data/strategyqa_data.json` with format: `{"question_id": int, "question": str, "answer": bool}`
+
+## Pipeline Architecture
+
+### Core Classes
+
+**See `pipeline/README.md` for detailed API documentation.** Quick reference:
+
+#### RolloutGenerator (`pipeline/rollout_generator.py`)
+
+Unified class for generating completions - works for both initial generation and continuation.
+
+```python
+generator = RolloutGenerator()
+
+# Initial generation from question
+rollouts = generator.generate_from_question("Is the sky blue?", n=10)
+
+# Continuation after intervention
+prompt = generator.format_question_prompt("Is the sky blue?")
+continued = generator.continue_generation(prompt, intervened_text, n=10)
+```
+
+**Key insight**: Both operations use the same underlying method - they're just calling the vLLM completions API!
+
+#### InterventionInserter (`pipeline/intervention_inserter.py`)
+
+Clips rollouts and inserts intervention text.
+
+```python
+inserter = InterventionInserter()
+
+intervened = inserter.clip_and_insert(
+    rollout="<think>Original reasoning...</think>",
+    intervention_text="Wait, let me reconsider.",
+    position_pct=0.5  # 0.0-1.0, where 0.5 = halfway
+)
+```
+
+**Extensible**: Easy to add new intervention strategies by subclassing `InterventionStrategy`.
+
+#### DecisionParser (`pipeline/decision_parser.py`)
+
+Extracts boolean decisions from model outputs.
+
+```python
+parser = DecisionParser()
+
+# Parse single decision
+decision = parser.parse_decision('{"decision": true}')  # Returns: True
+
+# Parse multiple decisions
+decisions = parser.parse_multiple(rollout_texts)  # Returns: [True, False, None, ...]
+```
+
+#### Analysis Utilities (`pipeline/analysis_utils.py`)
+
+Statistical analysis functions.
+
+```python
+from pipeline.analysis_utils import compute_statistics, test_significance
+
+# Compute % true, % false, % null
+stats = compute_statistics(decisions)
+print(stats['percent_true'])  # 0.75
+
+# Test if intervention significantly changed outcomes
+result = test_significance(control_decisions, intervention_decisions)
+print(result['p_value'])        # 0.023
+print(result['significant'])    # True
+print(result['effect_size'])    # +0.25
+```
+
+## Old Scripts (Archived)
+
+The original command-line scripts have been moved to `archive/` and superseded by the pipeline:
+
+- `archive/generate_strategyqa_rollouts.py` - Use `RolloutGenerator` instead
+- `archive/run_interventions.py` - Use `InterventionInserter` + `RolloutGenerator` instead
+- `archive/parse_rollout_decisions.py` - Use `DecisionParser` instead
+- `archive/get_steerable_question_ids.py` - Use `analysis_utils.compute_statistics()` instead
+- `archive/interventions.py` - Functionality integrated into `InterventionInserter`
+
+These are kept for reference but the pipeline is the recommended approach.
+
+## Common Workflows
+
+### Complete Experiment (Using Pipeline)
+
+The recommended workflow using the pipeline in a Jupyter notebook:
+
+1. **Start vLLM server**: `vllm serve Qwen/Qwen3-8b --port 8000`
+2. **Open `example_experiment.ipynb`** - Contains complete walkthrough
+3. **Customize intervention text and parameters**
+4. **Run cells to execute experiment**
+5. **Results saved to `data/interventions/{timestamp}_{hash}.json`**
+
+See `example_experiment.ipynb` for detailed step-by-step workflow.
+
+### One-Time Setup
+
+Load the StrategyQA dataset (only needed once):
+
+```bash
+python load_dataset.py
+```
+
+This creates `data/strategyqa_data.json` with 2,780 questions.
+
+### Interactive Exploration (Completion Steerer UI)
+
+For manual exploration of the completion space (optional):
+
+```bash
+# Terminal 1: Start vLLM
+vllm serve Qwen/Qwen3-8b --port 8000
+
+# Terminal 2: Start UI
+cd completion-steerer
+npm install  # First time only
+npm run dev
+
+# Open browser to http://localhost:5173
+```
+
+The UI allows selecting from 10 completion candidates at each generation step, with "time travel" to explore alternative branches.
 
 ## Technical Architecture
 
-### Multi-Step Completion Selection
+### Visual Architecture
 
-The core pattern used throughout this project:
+See `intervention_architecture.svg` for the complete flow diagram. The pipeline implements this architecture:
 
-1. **Format Prompt** - Apply chat template to user input
-2. **Generate n Completions** - Use vLLM with `n=10` to generate multiple options
-3. **Score/Select** - Either manually (UI) or automatically (steering vectors)
-4. **Continue** - Append selected text and repeat from step 2
-
-State management in UI (App.tsx:22-24):
-```typescript
-const [completionSteps, setCompletionSteps] = useState<CompletionStep[]>([]);
-const [currentChoices, setCurrentChoices] = useState<CompletionChoice[]>([]);
-const [isSelectingFromChoices, setIsSelectingFromChoices] = useState(false);
+```
+Questions → [RolloutGenerator] → Rollouts
+                                     ↓
+                   ┌─────────────────┴────────────────┐
+                   ↓                                  ↓
+            [DecisionParser]              [InterventionInserter]
+                   ↓                                  ↓
+             Parse decisions              Clip + insert text
+                   ↓                                  ↓
+            Compute stats                [RolloutGenerator] ← Same class!
+                                                     ↓
+                                          [DecisionParser]
+                                                     ↓
+                                          Test significance
 ```
 
-### Embedding-Based Steering
+### Key Design Principles
 
-Steering vector computation (steering_selector.py:72-79):
-1. Load angry/neutral emotion examples from `emotion_examples.json`
-2. Compute mean-pooled layer 15 embeddings for each set
-3. Normalize embeddings
-4. Compute steering vector as `angry - neutral`
-5. Normalize steering vector
+1. **Unified Generation**: `RolloutGenerator.generate()` works for both initial generation and continuation - it's just the vLLM completions API
+2. **Extensible Interventions**: `InterventionInserter` uses strategy pattern for easy extension
+3. **Clean Separation**: RolloutGenerator and DecisionParser are stable; InterventionInserter evolves with new strategies
+4. **Notebook-First**: All components designed for interactive Jupyter experimentation
 
-Scoring (steering_selector.py:152-179):
-1. Extract layer 15 embeddings for completion text
-2. Project onto steering vector: `score = embedding · steering_vector`
-3. Higher score = more aligned with angry direction
+### Prompt Formatting
+
+Pipeline uses tokenizer's chat template (rollout_generator.py:66-70):
+
+```python
+messages = [{"role": "user", "content": user_message}]
+formatted_prompt = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True  # Adds assistant prefix
+)
+```
+
+For Qwen3, this produces: `<|im_start|>user\n{content}<|im_end|>\n<|im_start|>assistant\n`
+
+### Output Files
+
+- `data/strategyqa_data.json` - Original questions from HuggingFace
+- `data/interventions/YYYY-MM-DD_HH-MM-SS_{hash}.json` - Experiment results (timestamped)
+  - Contains control rollouts, intervention rollouts, decisions, and statistical analysis
+
+The pipeline automatically generates timestamped filenames for each experiment run.
+
+## Additional Components
+
+### Completion Steerer UI (`completion-steerer/`)
+
+React + TypeScript + Vite application for interactive steering.
+
+```bash
+cd completion-steerer
+npm run dev    # Development server
+npm run build  # Production build
+npm run lint   # Lint TypeScript
+```
+
+**Architecture**:
+- `src/App.tsx` - Main UI with multi-step completion selection
+- `src/lib/vllm-api.ts` - vLLM API integration
+- `src/components/ui/` - shadcn/ui components
+
+### Initial Exploration (`initial_rough/`)
+
+Early prototypes and experiments:
+- Emotion-based steering vectors (now deprecated in favor of StrategyQA focus)
+- Notebooks for concept exploration
+- Dataset generation scripts
 
 ## Project Context
 
-This is research exploring the basic science of how LLMs respond to interventions during chain-of-thought reasoning. The interactive steerer allows manual exploration of the completion space, while the automatic selector demonstrates how embeddings can guide selection toward specific semantic directions.
+This research explores how interventions in chain-of-thought reasoning affect LLM decision-making. The key question: **Can injecting specific text at different reasoning positions systematically change model outputs?**
 
-The project pivoted from earlier emotion dataset work to focus on the fundamental mechanisms of CoT interventions and completion resampling.
+The StrategyQA dataset provides yes/no questions where reasoning matters. By generating diverse rollouts, we identify "steerable" questions where decisions aren't deterministic, then test interventions to see if we can flip answers.
