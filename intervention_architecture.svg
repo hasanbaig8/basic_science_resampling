@@ -1,0 +1,62 @@
+<svg viewBox="0 0 700 1400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#4A90E2" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#5CB85C" />
+    </marker>
+  </defs>
+  
+  <!-- Questions data -->
+  <rect x="50" y="30" width="250" height="100" rx="15" fill="#87CEEB" stroke="#4A90E2" stroke-width="3"/>
+  <text x="175" y="88" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold">Questions data</text>
+  
+  <!-- Arrow 1 -->
+  <path d="M 175 130 L 175 180" stroke="#4A90E2" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Generate rollout -->
+  <rect x="50" y="180" width="250" height="120" rx="15" fill="#90EE90" stroke="#5CB85C" stroke-width="3"/>
+  <text x="175" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold">generate rollout</text>
+  <text x="175" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold">(think + output)</text>
+  
+  <!-- Arrow 2 -->
+  <path d="M 175 300 L 175 350" stroke="#4A90E2" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rollout data -->
+  <rect x="50" y="350" width="250" height="100" rx="15" fill="#87CEEB" stroke="#4A90E2" stroke-width="3"/>
+  <text x="175" y="408" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold">Rollout data</text>
+  
+  <!-- Arrow 3 (straight down) -->
+  <path d="M 175 450 L 175 750" stroke="#4A90E2" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Arrow to intervention (right) -->
+  <path d="M 300 400 L 390 400" stroke="#4A90E2" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Intervention insertion -->
+  <rect x="390" y="350" width="260" height="120" rx="15" fill="#DC143C" stroke="#A00000" stroke-width="3"/>
+  <text x="520" y="395" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="white">intervention insertion</text>
+  <text x="520" y="420" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="white">(and clip text)</text>
+  
+  <!-- Arrow down from intervention -->
+  <path d="M 520 470 L 520 550" stroke="#DC143C" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Generate continued rollout -->
+  <rect x="390" y="550" width="260" height="120" rx="15" fill="#90EE90" stroke="#5CB85C" stroke-width="3"/>
+  <text x="520" y="595" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold">generate continued</text>
+  <text x="520" y="620" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold">rollout (think + output)</text>
+  
+  <!-- Arrow to parse decisions -->
+  <path d="M 390 610 L 300 610 L 300 800 L 225 800" stroke="#5CB85C" stroke-width="4" fill="none" marker-end="url(#arrowhead-green)"/>
+  
+  <!-- Parse decisions -->
+  <rect x="50" y="750" width="250" height="100" rx="15" fill="#DDA0DD" stroke="#9370DB" stroke-width="3"/>
+  <text x="175" y="808" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold">parse decisions</text>
+  
+  <!-- Arrow 4 -->
+  <path d="M 175 850 L 175 900" stroke="#9370DB" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>
+  
+  <!-- Measure success -->
+  <rect x="50" y="900" width="250" height="100" rx="15" fill="#FFB366" stroke="#FF8C00" stroke-width="3"/>
+  <text x="175" y="958" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold">measure success %</text>
+</svg>

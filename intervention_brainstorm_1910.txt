@@ -1,0 +1,24 @@
+All black-box intervention ideas brainstorm:
+early/middle/late in CoT (% of the way through)
+Get claude to paraphrase it based on the context
+Insert 1 sentence, or insert a whole paragraph
+If 1 sentence, early/middle/late into paragraph
+Get Qwen3-8b to paraphrase based on context
+Repeat the exact sentence that I want to insert n times, distributed earlier
+Can vary the regen-point too
+
+
+Rating difficulties:
+I insert 1 paragraph, irrespective of the context, just present an argument and insert it in between the end of a paragraph
+easy
+I insert 1 sentence at the end of a paragraph:
+Easy
+I get claude to paraphrase a thing that I wrote:
+Medium
+I get Qwen3-8b to paraphrase thing I wrote:
+Easy-medium
+Repeat the exact sentence n times distributed earlier
+Randomly: medium
+Principled: hard
+Choosing the proportion of the way through
+Easy
