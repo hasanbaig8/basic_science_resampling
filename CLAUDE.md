@@ -57,6 +57,13 @@ jupyter notebook
 
 ## Quick Start
 
+### Prerequisites
+
+Before running experiments, ensure you have:
+1. Activated the virtual environment: `source .venv/bin/activate`
+2. Started the vLLM server: `vllm serve Qwen/Qwen3-8b --port 8000`
+3. Loaded the dataset: `python load_dataset.py` (creates `data/strategyqa_data.json`)
+
 ### Using the Pipeline (Recommended)
 
 The pipeline architecture is designed for running intervention experiments:
@@ -108,6 +115,21 @@ python load_dataset.py
 
 Creates `data/strategyqa_data.json` with format: `{"question_id": int, "question": str, "answer": bool}`
 
+### Generating Rollouts (One-Time Setup)
+
+Generate rollouts for all StrategyQA questions (required for identifying steerable questions):
+
+```bash
+python generate_rollouts_with_pipeline.py
+```
+
+This creates:
+- `data/strategyqa_rollouts.json` - Raw model outputs for all questions
+- `data/strategyqa_rollouts_parsed.json` - Parsed decisions with statistics
+- `data/steerable_question_ids.json` - Questions where control rollouts show decision variance
+
+**Note**: This is a one-time setup step. Steerable questions are those where the model doesn't always give the same answer, making them good candidates for intervention experiments
+
 ## Pipeline Architecture
 
 ### Core Classes
@@ -133,19 +155,22 @@ continued = generator.continue_generation(prompt, intervened_text, n=10)
 
 #### InterventionInserter (`pipeline/intervention_inserter.py`)
 
-Clips rollouts and inserts intervention text.
+Clips rollouts and inserts intervention text using a strategy pattern.
 
 ```python
-inserter = InterventionInserter()
+from pipeline.intervention_inserter import DirectInsertionStrategy
+
+# Position is configured in the strategy
+strategy = DirectInsertionStrategy(position_pct=0.5)
+inserter = InterventionInserter(strategy=strategy)
 
 intervened = inserter.apply(
     rollout="<think>Original reasoning...</think>",
-    intervention_text="Wait, let me reconsider.",
-    position_pct=0.5  # 0.0-1.0, where 0.5 = halfway
+    intervention_text="Wait, let me reconsider."
 )
 ```
 
-**Extensible**: Easy to add new intervention strategies by subclassing `InterventionStrategy`.
+**Extensible**: Easy to add new intervention strategies by subclassing `InterventionStrategy`. Position and other parameters are configured at strategy initialization, not in the `apply()` method.
 
 #### DecisionParser (`pipeline/decision_parser.py`)
 
@@ -179,17 +204,19 @@ print(result['significant'])    # True
 print(result['effect_size'])    # +0.25
 ```
 
-## Old Scripts (Archived)
+## Scripts Overview
 
-The original command-line scripts have been moved to `archive/` and superseded by the pipeline:
+**Active scripts** (use these):
+- `load_dataset.py` - Load StrategyQA dataset from HuggingFace
+- `generate_rollouts_with_pipeline.py` - Generate rollouts and identify steerable questions
+- `experiments/1_1_dumb_tf_25_50_75.py` - Example batch experiment
 
-- `archive/generate_strategyqa_rollouts.py` - Use `RolloutGenerator` instead
-- `archive/run_interventions.py` - Use `InterventionInserter` + `RolloutGenerator` instead
-- `archive/parse_rollout_decisions.py` - Use `DecisionParser` instead
-- `archive/get_steerable_question_ids.py` - Use `analysis_utils.compute_statistics()` instead
+**Archived scripts** (deprecated, use pipeline instead):
+- `archive/generate_strategyqa_rollouts.py` - Use `RolloutGenerator` + `generate_rollouts_with_pipeline.py`
+- `archive/run_interventions.py` - Use `InterventionInserter` + `RolloutGenerator`
+- `archive/parse_rollout_decisions.py` - Use `DecisionParser`
+- `archive/get_steerable_question_ids.py` - Use `generate_rollouts_with_pipeline.py`
 - `archive/interventions.py` - Functionality integrated into `InterventionInserter`
-
-These are kept for reference but the pipeline is the recommended approach.
 
 ## Common Workflows
 
@@ -207,13 +234,21 @@ See `example_experiment.ipynb` for detailed step-by-step workflow.
 
 ### One-Time Setup
 
-Load the StrategyQA dataset (only needed once):
+1. **Load the StrategyQA dataset** (only needed once):
 
 ```bash
 python load_dataset.py
 ```
 
 This creates `data/strategyqa_data.json` with 2,780 questions.
+
+2. **Generate rollouts and identify steerable questions** (only needed once):
+
+```bash
+python generate_rollouts_with_pipeline.py
+```
+
+This generates rollouts for all questions and identifies which ones show variance in their control decisions (i.e., "steerable" questions that are good candidates for intervention experiments). Creates `data/steerable_question_ids.json`.
 
 ### Interactive Exploration (Completion Steerer UI)
 
@@ -279,9 +314,14 @@ For Qwen3, this produces: `<|im_start|>user\n{content}<|im_end|>\n<|im_start|>as
 
 ### Output Files
 
-- `data/strategyqa_data.json` - Original questions from HuggingFace
-- `data/interventions/YYYY-MM-DD_HH-MM-SS_{hash}.json` - Experiment results (timestamped)
-  - Contains control rollouts, intervention rollouts, decisions, and statistical analysis
+**Data files**:
+- `data/strategyqa_data.json` - Original questions from HuggingFace (2,780 questions)
+- `data/strategyqa_rollouts.json` - Control rollouts for all questions (generated once)
+- `data/strategyqa_rollouts_parsed.json` - Parsed control decisions with statistics
+- `data/steerable_question_ids.json` - List of question IDs with decision variance
+- `data/interventions/YYYY-MM-DD_HH-MM-SS_{hash}.json` - Individual experiment results (timestamped)
+
+**Important**: Use steerable questions (from `steerable_question_ids.json`) for intervention experiments. These questions show variance in control rollouts, making them good candidates for testing whether interventions can systematically shift decisions. Questions where the model always gives the same answer won't reveal intervention effects.
 
 The pipeline automatically generates timestamped filenames for each experiment run.
 
