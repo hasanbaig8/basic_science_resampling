@@ -9,6 +9,8 @@ from datetime import datetime
 import numpy as np
 
 os.chdir(Path(__file__).parent.parent)
+print(f"Current directory: {os.getcwd()}")
+
 from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
 from pipeline.analysis_utils import (
     compute_statistics,
@@ -176,44 +178,79 @@ def generate_experiment_data():
 
             print(f"✓ Saved results to {filename}")
 # %%
-#generate_experiment_data()
+generate_experiment_data()
 # %%
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
-def analyze_position_results(position_pct):
+def load_experiment_data(positions_pct=[0.25, 0.5, 0.75]):
+    """Load all experiment data into a pandas DataFrame.
+
+    Args:
+        positions_pct: List of position percentages to load data for
+
+    Returns:
+        DataFrame with columns: question_id, position_pct, control_prop, intervention_prop,
+                               effect, n_control, n_intervention, control_rollouts, intervention_rollouts
+    """
+    data = []
+
+    for position_pct in positions_pct:
+        folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position_pct*100)}'
+
+        if not os.path.exists(folder_path):
+            continue
+
+        for filename in os.listdir(folder_path):
+            if filename.endswith('.json'):
+                filepath = os.path.join(folder_path, filename)
+                with open(filepath, 'r') as f:
+                    experiment_data = json.load(f)
+
+                # Extract question ID from filename
+                question_id = filename.replace('.json', '')
+
+                # Extract stats
+                n_total_control = experiment_data['analysis']['control_stats']['n_total']
+                n_true_control = experiment_data['analysis']['control_stats']['n_true']
+                n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
+                n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
+
+                # Calculate proportions
+                control_prop = n_true_control / n_total_control if n_total_control > 0 else np.nan
+                intervention_prop = n_true_intervention / n_total_intervention if n_total_intervention > 0 else np.nan
+                effect = intervention_prop - control_prop if not np.isnan(control_prop) and not np.isnan(intervention_prop) else np.nan
+
+                data.append({
+                    'question_id': question_id,
+                    'position_pct': position_pct,
+                    'control_prop': control_prop,
+                    'intervention_prop': intervention_prop,
+                    'effect': effect,
+                    'n_control': n_total_control,
+                    'n_intervention': n_total_intervention,
+                    'control_rollouts': experiment_data['control']['rollouts'],
+                    'intervention_rollouts': experiment_data['intervention']['rollouts']
+                })
+
+    return pd.DataFrame(data)
+
+# Load all data once
+df = load_experiment_data(positions_pct)
+print(f"Loaded {len(df)} experiments across {df['position_pct'].nunique()} positions")
+
+# %%
+def analyze_position_results(df, position_pct):
     """Analyze and plot results for a specific intervention position."""
-    # Collect proportions for histogram
-    control_proportions = []
-    intervention_proportions = []
-
-    # Loop through all JSON files for this position
-    folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position_pct*100)}'
-    for filename in os.listdir(folder_path):
-        if filename.endswith('.json'):
-            filepath = os.path.join(folder_path, filename)
-            with open(filepath, 'r') as f:
-                experiment_data = json.load(f)
-            
-            # Extract stats from this file
-            n_total_control = experiment_data['analysis']['control_stats']['n_total']
-            n_true_control = experiment_data['analysis']['control_stats']['n_true']
-            n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
-            n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
-            
-            # Calculate proportions
-            control_proportion = n_true_control / n_total_control if n_total_control > 0 else 0
-            intervention_proportion = n_true_intervention / n_total_intervention if n_total_intervention > 0 else 0
-            
-            control_proportions.append(control_proportion)
-            intervention_proportions.append(intervention_proportion)
+    data = df[df['position_pct'] == position_pct].dropna(subset=['control_prop', 'intervention_prop'])
 
     # Create histogram
     plt.figure(figsize=(10, 6))
     bins = np.linspace(0, 1, 21)  # 20 bins from 0 to 1
 
-    plt.hist(control_proportions, bins=bins, alpha=0.7, label='Control', color='blue', edgecolor='black')
-    plt.hist(intervention_proportions, bins=bins, alpha=0.7, label='Intervention', color='red', edgecolor='black')
+    plt.hist(data['control_prop'], bins=bins, alpha=0.7, label='Control', color='blue', edgecolor='black')
+    plt.hist(data['intervention_prop'], bins=bins, alpha=0.7, label='Intervention', color='red', edgecolor='black')
 
     plt.xlabel('Proportion True')
     plt.ylabel('Frequency')
@@ -225,84 +262,24 @@ def analyze_position_results(position_pct):
 
     # Print summary statistics
     print(f"\nSummary Statistics for {int(position_pct*100)}% position:")
-    print(f"Control - Mean: {np.mean(control_proportions):.3f}, Std: {np.std(control_proportions):.3f}")
-    print(f"Intervention - Mean: {np.mean(intervention_proportions):.3f}, Std: {np.std(intervention_proportions):.3f}")
-    print(f"Difference in means: {np.mean(intervention_proportions) - np.mean(control_proportions):.3f}")
+    print(f"Control - Mean: {data['control_prop'].mean():.3f}, Std: {data['control_prop'].std():.3f}")
+    print(f"Intervention - Mean: {data['intervention_prop'].mean():.3f}, Std: {data['intervention_prop'].std():.3f}")
+    print(f"Difference in means: {data['effect'].mean():.3f}")
 
 # Run analysis for all positions
 for position_pct in positions_pct:
-    analyze_position_results(position_pct)
+    analyze_position_results(df, position_pct)
 
 # %%
-# Plot the difference (intervention - control) for each position
-def plot_intervention_effect():
-    positions_pct = [0.25, 0.5, 0.75]
-    all_differences = []
-    position_labels = []
-    
-    for position_pct in positions_pct:
-        control_proportions = []
-        intervention_proportions = []
-        
-        # Loop through all JSON files for this position
-        folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position_pct*100)}'
-        for filename in os.listdir(folder_path):
-            if filename.endswith('.json'):
-                filepath = os.path.join(folder_path, filename)
-                with open(filepath, 'r') as f:
-                    experiment_data = json.load(f)
-                
-                # Extract stats from this file
-                n_total_control = experiment_data['analysis']['control_stats']['n_total']
-                n_true_control = experiment_data['analysis']['control_stats']['n_true']
-                n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
-                n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
-                
-                # Calculate proportions
-                control_proportion = n_true_control / n_total_control if n_total_control > 0 else 0
-                intervention_proportion = n_true_intervention / n_total_intervention if n_total_intervention > 0 else 0
-                
-                control_proportions.append(control_proportion)
-                intervention_proportions.append(intervention_proportion)
-        
-        # Calculate differences for this position
-        differences = [interv - ctrl for interv, ctrl in zip(intervention_proportions, control_proportions)]
-        all_differences.extend(differences)
-        position_labels.extend([f'{int(position_pct*100)}%'] * len(differences))
-    
-    # Create box plot of differences by position
-    plt.figure(figsize=(10, 6))
-    
+def plot_intervention_effect(df):
+    """Plot the difference (intervention - control) for each position."""
+    data = df.dropna(subset=['effect'])
+
     # Prepare data for box plot
-    position_data = []
-    positions = [0.25, 0.5, 0.75]
-    
-    for position_pct in positions:
-        control_proportions = []
-        intervention_proportions = []
-        
-        folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position_pct*100)}'
-        for filename in os.listdir(folder_path):
-            if filename.endswith('.json'):
-                filepath = os.path.join(folder_path, filename)
-                with open(filepath, 'r') as f:
-                    experiment_data = json.load(f)
-                
-                n_total_control = experiment_data['analysis']['control_stats']['n_total']
-                n_true_control = experiment_data['analysis']['control_stats']['n_true']
-                n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
-                n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
-                
-                control_proportion = n_true_control / n_total_control if n_total_control > 0 else 0
-                intervention_proportion = n_true_intervention / n_total_intervention if n_total_intervention > 0 else 0
-                
-                control_proportions.append(control_proportion)
-                intervention_proportions.append(intervention_proportion)
-        
-        differences = [interv - ctrl for interv, ctrl in zip(intervention_proportions, control_proportions)]
-        position_data.append(differences)
-    
-    plt.boxplot(position_data, labels=[f'{int(p*100)}%' for p in positions])
+    position_data = [data[data['position_pct'] == p]['effect'].values for p in [0.25, 0.5, 0.75]]
+
+    plt.figure(figsize=(10, 6))
+    plt.boxplot(position_data, labels=['25%', '50%', '75%'])
     plt.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='No effect')
     plt.xlabel('Position in Sequence')
     plt.ylabel('Intervention Effect (Intervention - Control)')
@@ -311,212 +288,118 @@ def plot_intervention_effect():
     plt.legend()
     plt.tight_layout()
     plt.show()
-    
+
     # Print summary statistics for differences
     print("\nIntervention Effect Summary (Intervention - Control):")
-    for i, position_pct in enumerate(positions):
-        differences = position_data[i]
-        print(f"{int(position_pct*100)}% position - Mean effect: {np.mean(differences):.3f}, Std: {np.std(differences):.3f}")
+    for position_pct in [0.25, 0.5, 0.75]:
+        effects = data[data['position_pct'] == position_pct]['effect']
+        print(f"{int(position_pct*100)}% position - Mean effect: {effects.mean():.3f}, Std: {effects.std():.3f}")
 
-plot_intervention_effect()
+plot_intervention_effect(df)
 
 # %%
-def plot_intervention_effect_scatter(positions=[0.25, 0.5]):
-    """Create scatter plot of intervention effect between two positions
-    
+def plot_intervention_effect_scatter(df, positions=[0.25, 0.5]):
+    """Create scatter plot of intervention effect between two positions.
+
     Args:
+        df: DataFrame with experiment data
         positions: List of two position percentages (e.g., [0.25, 0.5])
     """
-    
     if len(positions) != 2:
         raise ValueError("Exactly two positions must be provided")
-    
-    # Collect data for the specified positions
-    effects_by_position = {}
-    
-    for position_pct in positions:
-        folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position_pct*100)}'
-        effects = {}
-        
-        for filename in os.listdir(folder_path):
-            if filename.endswith('.json'):
-                filepath = os.path.join(folder_path, filename)
-                with open(filepath, 'r') as f:
-                    experiment_data = json.load(f)
-                
-                # Extract question ID from filename (assuming format like 'question_123.json')
-                question_id = filename.replace('.json', '')
-                
-                n_total_control = experiment_data['analysis']['control_stats']['n_total']
-                n_true_control = experiment_data['analysis']['control_stats']['n_true']
-                n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
-                n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
-                
-                control_proportion = n_true_control / n_total_control if n_total_control > 0 else 0
-                intervention_proportion = n_true_intervention / n_total_intervention if n_total_intervention > 0 else 0
-                
-                effect = intervention_proportion - control_proportion
-                effects[question_id] = effect
-        
-        effects_by_position[position_pct] = effects
-    
-    # Find common question IDs
-    common_ids = set(effects_by_position[positions[0]].keys()) & set(effects_by_position[positions[1]].keys())
-    
-    # Prepare data for scatter plot
-    effects_pos1 = [effects_by_position[positions[0]][qid] for qid in common_ids]
-    effects_pos2 = [effects_by_position[positions[1]][qid] for qid in common_ids]
-    
+
+    # Pivot to get effects for both positions with question_id as index
+    pivot = df[df['position_pct'].isin(positions)].pivot(
+        index='question_id',
+        columns='position_pct',
+        values='effect'
+    ).dropna()
+
+    effects_pos1 = pivot[positions[0]].values
+    effects_pos2 = pivot[positions[1]].values
+
     plt.figure(figsize=(8, 8))
     plt.scatter(effects_pos1, effects_pos2, alpha=0.6)
-    
+
     # Add diagonal line for reference (y=x)
-    min_val = min(min(effects_pos1), min(effects_pos2))
-    max_val = max(max(effects_pos1), max(effects_pos2))
+    min_val = min(effects_pos1.min(), effects_pos2.min())
+    max_val = max(effects_pos1.max(), effects_pos2.max())
     plt.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, label='y=x')
-    
+
     # Add zero lines
     plt.axhline(y=0, color='gray', linestyle='-', alpha=0.3)
     plt.axvline(x=0, color='gray', linestyle='-', alpha=0.3)
-    
+
     plt.xlabel(f'Intervention Effect at {int(positions[0]*100)}% Position')
     plt.ylabel(f'Intervention Effect at {int(positions[1]*100)}% Position')
     plt.title(f'Intervention Effect: {int(positions[0]*100)}% vs {int(positions[1]*100)}% Position\n(Each point is a question)')
     plt.grid(True, alpha=0.3)
     plt.legend()
-    
+
     # Calculate and display correlation
     correlation = np.corrcoef(effects_pos1, effects_pos2)[0, 1]
-    plt.text(0.05, 0.95, f'Correlation: {correlation:.3f}', 
+    plt.text(0.05, 0.95, f'Correlation: {correlation:.3f}',
              transform=plt.gca().transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
+
     plt.tight_layout()
     plt.show()
-    
-    print(f"\nScatter plot shows {len(common_ids)} questions with data at both {int(positions[0]*100)}% and {int(positions[1]*100)}% positions")
+
+    print(f"\nScatter plot shows {len(pivot)} questions with data at both {int(positions[0]*100)}% and {int(positions[1]*100)}% positions")
     print(f"Correlation between effects: {correlation:.3f}")
 
-plot_intervention_effect_scatter()
+plot_intervention_effect_scatter(df)
 
 # %%
-plot_intervention_effect_scatter(positions=[0.5, 0.75])
+plot_intervention_effect_scatter(df, positions=[0.5, 0.75])
+
 # %%
-def plot_intervention_effect_vs_control_percentage(position=0.25):
-    """
-    Plot intervention effect vs control percentage for a specific position.
+def plot_intervention_effect_vs_control_percentage(df, position=0.25):
+    """Plot intervention effect vs control percentage for a specific position.
+
     Shows how the intervention effect varies with the baseline control percentage.
     """
-    # Collect data for the specified position
-    question_metrics = []
-    
-    folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position*100)}'
-    for filename in os.listdir(folder_path):
-        if filename.endswith('.json'):
-            filepath = os.path.join(folder_path, filename)
-            with open(filepath, 'r') as f:
-                experiment_data = json.load(f)
-            
-            # Extract question ID from filename
-            question_id = filename.replace('.json', '')
-            
-            # Extract stats from this file
-            n_total_control = experiment_data['analysis']['control_stats']['n_total']
-            n_true_control = experiment_data['analysis']['control_stats']['n_true']
-            n_total_intervention = experiment_data['analysis']['intervention_stats']['n_total']
-            n_true_intervention = experiment_data['analysis']['intervention_stats']['n_true']
-            
-            # Skip if no data for either group
-            if n_total_control == 0 or n_total_intervention == 0:
-                continue
-                
-            control_proportion = n_true_control / n_total_control
-            intervention_proportion = n_true_intervention / n_total_intervention
-            
-            effect = intervention_proportion - control_proportion
-            
-            question_metrics.append({
-                'question_id': question_id,
-                'control_percentage': control_proportion * 100,
-                'intervention_effect': effect,
-                'n_control': n_total_control,
-                'n_intervention': n_total_intervention
-            })
-    
-    # Convert to arrays for plotting
-    control_percentages = [m['control_percentage'] for m in question_metrics]
-    intervention_effects = [m['intervention_effect'] for m in question_metrics]
-    
+    data = df[(df['position_pct'] == position) & (df['n_control'] > 0) & (df['n_intervention'] > 0)].copy()
+    data['control_percentage'] = data['control_prop'] * 100
+
     plt.figure(figsize=(10, 6))
-    plt.scatter(control_percentages, intervention_effects, alpha=0.6)
-    
+    plt.scatter(data['control_percentage'], data['effect'], alpha=0.6)
+
     # Add horizontal line at y=0
     plt.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='No effect')
-    
+
     plt.xlabel('Control Group Percentage (% answering True)')
     plt.ylabel('Intervention Effect (Intervention % - Control %)')
     plt.title(f'Intervention Effect vs Control Percentage at {int(position*100)}% Position\n(Each point is a question)')
     plt.grid(True, alpha=0.3)
     plt.legend()
-    
+
     # Calculate and display correlation
-    if len(control_percentages) > 1:
-        correlation = np.corrcoef(control_percentages, intervention_effects)[0, 1]
-        plt.text(0.05, 0.95, f'Correlation: {correlation:.3f}', 
+    if len(data) > 1:
+        correlation = np.corrcoef(data['control_percentage'], data['effect'])[0, 1]
+        plt.text(0.05, 0.95, f'Correlation: {correlation:.3f}',
                  transform=plt.gca().transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
+
     plt.tight_layout()
     plt.show()
-    
-    print(f"\nAnalyzed {len(question_metrics)} questions at {int(position*100)}% position")
-    if len(control_percentages) > 1:
-        print(f"Correlation between control percentage and intervention effect: {correlation:.3f}")
-    
-    # Print some summary statistics
-    if control_percentages:
-        print(f"Control percentage range: {min(control_percentages):.1f}% - {max(control_percentages):.1f}%")
-        print(f"Intervention effect range: {min(intervention_effects):.3f} - {max(intervention_effects):.3f}")
 
-plot_intervention_effect_vs_control_percentage()
+    print(f"\nAnalyzed {len(data)} questions at {int(position*100)}% position")
+    if len(data) > 1:
+        print(f"Correlation between control percentage and intervention effect: {correlation:.3f}")
+    print(f"Control percentage range: {data['control_percentage'].min():.1f}% - {data['control_percentage'].max():.1f}%")
+    print(f"Intervention effect range: {data['effect'].min():.3f} - {data['effect'].max():.3f}")
+
+plot_intervention_effect_vs_control_percentage(df)
 
 # %%
-# Plot histogram of rollout lengths: intervention vs control
-def plot_rollout_lengths():
-    positions = [0.25, 0.5, 0.75]
-    
-    for position in positions:
-        control_lengths = []
-        intervention_lengths = []
-        
-        # Loop through all JSON files for this position
-        folder_path = f'data/interventions/experiment_1_1_dumb_tf/{int(position*100)}'
-        for filename in os.listdir(folder_path):
-            if filename.endswith('.json'):
-                filepath = os.path.join(folder_path, filename)
-                with open(filepath, 'r') as f:
-                    experiment_data = json.load(f)
-                
-                # Extract rollout lengths from control group
-                for rollout in experiment_data['control']['rollouts']:
-                    control_lengths.append(len(rollout))
-                
-                # Extract rollout lengths from intervention group
-                for rollout in experiment_data['intervention']['rollouts']:
-                    intervention_lengths.append(len(rollout))
-        
-        # Create histogram
-        plt.figure(figsize=(12, 6))
-        
-        # Determine appropriate bins
-        all_lengths = control_lengths + intervention_lengths
-        if all_lengths:
-            min_len = min(all_lengths)
-            max_len = max(all_lengths)
-            bins = range(min_len, max_len + 2)  # +2 to include max_len in the last bin
-        else:
-            bins = 20
-        
-        
-        # Print summary statistics
+def plot_rollout_lengths(df):
+    """Plot histogram of rollout lengths: intervention vs control."""
+    for position in [0.25, 0.5, 0.75]:
+        position_data = df[df['position_pct'] == position]
+
+        # Extract all rollout lengths
+        control_lengths = [len(rollout) for rollouts in position_data['control_rollouts'] for rollout in rollouts]
+        intervention_lengths = [len(rollout) for rollouts in position_data['intervention_rollouts'] for rollout in rollouts]
+
         if control_lengths and intervention_lengths:
             print(f"\nRollout Length Statistics for {int(position*100)}% position:")
             print(f"Control - Mean: {np.mean(control_lengths):.1f}, Std: {np.std(control_lengths):.1f}, Median: {np.median(control_lengths):.1f}")
@@ -525,6 +408,146 @@ def plot_rollout_lengths():
             print(f"Control range: {min(control_lengths)} - {max(control_lengths)}")
             print(f"Intervention range: {min(intervention_lengths)} - {max(intervention_lengths)}")
 
-plot_rollout_lengths()
+plot_rollout_lengths(df)
+
+# %%
+def plot_control_vs_intervention(df):
+    """Plot control proportion vs intervention proportion for each position.
+
+    Tests whether control and intervention proportions are correlated.
+    """
+    _, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for idx, position in enumerate([0.25, 0.5, 0.75]):
+        data = df[df['position_pct'] == position].dropna(subset=['control_prop', 'intervention_prop'])
+
+        ax = axes[idx]
+        ax.scatter(data['control_prop'], data['intervention_prop'], alpha=0.6)
+
+        # Add diagonal line for reference (y=x)
+        ax.plot([0, 1], [0, 1], 'r--', alpha=0.7, label='y=x (no effect)')
+
+        # Add grid lines at 0.5
+        ax.axhline(y=0.5, color='gray', linestyle=':', alpha=0.3)
+        ax.axvline(x=0.5, color='gray', linestyle=':', alpha=0.3)
+
+        ax.set_xlabel('Control Proportion True')
+        ax.set_ylabel('Intervention Proportion True')
+        ax.set_title(f'{int(position*100)}% Position')
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        ax.set_aspect('equal', adjustable='box')
+
+        # Calculate and display correlation (on centered data)
+        if len(data) > 1:
+            # Center the data (subtract means)
+            control_centered = data['control_prop'] - data['control_prop'].mean()
+            intervention_centered = data['intervention_prop'] - data['intervention_prop'].mean()
+            correlation = np.corrcoef(control_centered, intervention_centered)[0, 1]
+            ax.text(0.05, 0.95, f'Correlation (centered): {correlation:.3f}\nn={len(data)}',
+                   transform=ax.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                   verticalalignment='top')
+
+    plt.suptitle('Control vs Intervention Proportion True by Position', fontsize=14, y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+    # Print summary statistics
+    print("\nControl vs Intervention Correlation Analysis (centered data):")
+    for position in [0.25, 0.5, 0.75]:
+        data = df[df['position_pct'] == position].dropna(subset=['control_prop', 'intervention_prop'])
+        if len(data) > 1:
+            # Center the data
+            control_centered = data['control_prop'] - data['control_prop'].mean()
+            intervention_centered = data['intervention_prop'] - data['intervention_prop'].mean()
+            correlation = np.corrcoef(control_centered, intervention_centered)[0, 1]
+            print(f"{int(position*100)}% position - Correlation: {correlation:.3f} (n={len(data)})")
+
+plot_control_vs_intervention(df)
+
+# %%
+def plot_intervention_effect_correlation_by_control_quintile(df, positions=[0.25, 0.5]):
+    """Plot correlation of intervention effects between two positions, stratified by control group quintiles.
+
+    Args:
+        df: DataFrame with experiment data
+        positions: List of two position percentages (e.g., [0.25, 0.5])
+    """
+    if len(positions) != 2:
+        raise ValueError("Exactly two positions must be provided")
+
+    # Get data for both positions with control proportion
+    data_25 = df[df['position_pct'] == positions[0]][['question_id', 'control_prop', 'effect']].rename(columns={'effect': 'effect_25'})
+    data_50 = df[df['position_pct'] == positions[1]][['question_id', 'control_prop', 'effect']].rename(columns={'effect': 'effect_50'})
+
+    # Merge on question_id, using control_prop from first position
+    merged = data_25.merge(data_50[['question_id', 'effect_50']], on='question_id').dropna()
+
+    # Create quintiles based on control proportion
+    merged['control_quintile'] = pd.qcut(merged['control_prop'], q=5, labels=['0-20%', '20-40%', '40-60%', '60-80%', '80-100%'])
+
+    # Create 5 subplots
+    fig, axes = plt.subplots(1, 5, figsize=(25, 4))
+
+    quintile_labels = ['0-20%', '20-40%', '40-60%', '60-80%', '80-100%']
+
+    for idx, quintile in enumerate(quintile_labels):
+        quintile_data = merged[merged['control_quintile'] == quintile]
+
+        ax = axes[idx]
+
+        if len(quintile_data) > 0:
+            ax.scatter(quintile_data['effect_25'], quintile_data['effect_50'], alpha=0.6)
+
+            # Add diagonal line for reference (y=x)
+            effects_25 = quintile_data['effect_25'].values
+            effects_50 = quintile_data['effect_50'].values
+            min_val = min(effects_25.min(), effects_50.min())
+            max_val = max(effects_25.max(), effects_50.max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, label='y=x')
+
+            # Add zero lines
+            ax.axhline(y=0, color='gray', linestyle=':', alpha=0.3)
+            ax.axvline(x=0, color='gray', linestyle=':', alpha=0.3)
+
+            ax.set_xlabel(f'{int(positions[0]*100)}% Effect')
+            ax.set_ylabel(f'{int(positions[1]*100)}% Effect')
+            ax.set_title(f'Control {quintile}')
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper left', fontsize=8)
+            ax.set_aspect('equal', adjustable='box')
+
+            # Calculate and display correlation
+            if len(quintile_data) > 1:
+                correlation = np.corrcoef(quintile_data['effect_25'], quintile_data['effect_50'])[0, 1]
+                ax.text(0.95, 0.05, f'r={correlation:.3f}\nn={len(quintile_data)}',
+                       transform=ax.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                       verticalalignment='bottom', horizontalalignment='right', fontsize=9)
+        else:
+            ax.text(0.5, 0.5, 'No data', transform=ax.transAxes,
+                   ha='center', va='center', fontsize=12)
+            ax.set_xlabel(f'{int(positions[0]*100)}% Effect')
+            ax.set_ylabel(f'{int(positions[1]*100)}% Effect')
+            ax.set_title(f'Control {quintile}')
+
+    plt.suptitle(f'Intervention Effect Correlation ({int(positions[0]*100)}% vs {int(positions[1]*100)}%) by Control Group Quintile',
+                 fontsize=14, y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+    # Print summary statistics
+    print(f"\nIntervention Effect Correlation ({int(positions[0]*100)}% vs {int(positions[1]*100)}%) by Control Quintile:")
+    for quintile in quintile_labels:
+        quintile_data = merged[merged['control_quintile'] == quintile]
+        if len(quintile_data) > 1:
+            correlation = np.corrcoef(quintile_data['effect_25'], quintile_data['effect_50'])[0, 1]
+            mean_control = quintile_data['control_prop'].mean()
+            print(f"{quintile:>10} - r={correlation:.3f}, n={len(quintile_data):2d}, mean_control={mean_control:.3f}")
+        else:
+            print(f"{quintile:>10} - Insufficient data (n={len(quintile_data)})")
+
+plot_intervention_effect_correlation_by_control_quintile(df, positions=[0.25, 0.5])
 
 # %%
