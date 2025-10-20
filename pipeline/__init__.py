@@ -43,6 +43,7 @@ from .intervention_inserter import (
     DirectInsertionStrategy,
     extract_think_content
 )
+from .voice_in_head_strategy import VoiceInHeadStrategy
 from .decision_parser import DecisionParser
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     'InterventionInserter',
     'InterventionStrategy',
     'DirectInsertionStrategy',
+    'VoiceInHeadStrategy',
     'DecisionParser',
     'extract_think_content'
 ]

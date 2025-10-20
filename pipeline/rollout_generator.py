@@ -46,25 +46,16 @@ class RolloutGenerator:
         # Load tokenizer for chat template formatting
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    def format_question_prompt(self, question: str) -> str:
+    def apply_chat_template(self, messages: List[dict]) -> str:
         """
-        Format a question using the chat template.
+        Apply chat template to messages.
 
         Args:
-            question: The yes/no question to answer
+            messages: List of message dictionaries with 'role' and 'content' keys
 
         Returns:
             Formatted prompt with chat template applied
         """
-        user_message = f"""Answer the following yes/no question.
-
-Question: {question}
-
-Provide your final answer as a JSON object: {{"decision": true}} or {{"decision": false}}"""
-
-        messages = [{"role": "user", "content": user_message}]
-
-        # Apply chat template with generation prompt
         formatted_prompt = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,

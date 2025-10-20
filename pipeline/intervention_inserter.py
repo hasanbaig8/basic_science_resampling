@@ -23,13 +23,14 @@ class InterventionStrategy(ABC):
     """
 
     @abstractmethod
-    def apply(self, rollout: str, intervention_text: str) -> str:
+    def apply(self, rollout: str, intervention_text: str, prompt: Optional[str] = None) -> str:
         """
         Apply the intervention to a rollout.
 
         Args:
             rollout: The original rollout text (may include <think> tags)
             intervention_text: Text to insert
+            prompt: Optional formatted prompt (useful for context-aware strategies)
 
         Returns:
             Modified text ready for continuation (with open <think> tag if applicable)
@@ -66,7 +67,7 @@ class DirectInsertionStrategy(InterventionStrategy):
             raise ValueError(f"position_pct must be between 0.0 and 1.0, got {position_pct}")
         self.position_pct = position_pct
 
-    def apply(self, rollout: str, intervention_text: str) -> str:
+    def apply(self, rollout: str, intervention_text: str, prompt: Optional[str] = None) -> str:
         """
         Clip rollout and insert intervention text.
 
@@ -76,6 +77,7 @@ class DirectInsertionStrategy(InterventionStrategy):
         Args:
             rollout: The original rollout text
             intervention_text: Text to insert after clipping
+            prompt: Optional formatted prompt (not used in DirectInsertionStrategy)
 
         Returns:
             Clipped text with intervention inserted, ending with open <think> tag
@@ -135,7 +137,8 @@ class InterventionInserter:
     def apply(
         self,
         rollout: str,
-        intervention_text: str
+        intervention_text: str,
+        prompt: Optional[str] = None
     ) -> str:
         """
         Clip a rollout and insert intervention text using the configured strategy.
@@ -143,6 +146,7 @@ class InterventionInserter:
         Args:
             rollout: The original rollout text
             intervention_text: Text to insert after clipping
+            prompt: Optional formatted prompt (for context-aware strategies)
 
         Returns:
             Modified rollout ready for continuation
@@ -159,7 +163,7 @@ class InterventionInserter:
             ...     intervention_text="Wait, let me reconsider."
             ... )
         """
-        return self.strategy.apply(rollout, intervention_text)
+        return self.strategy.apply(rollout, intervention_text, prompt)
 
     def set_strategy(self, strategy: InterventionStrategy):
         """
