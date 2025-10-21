@@ -24,6 +24,11 @@ export interface VoiceInHeadResult extends InterventionResult {
   fullOutput: string;
 }
 
+export interface TokenLogprob {
+  token: string;
+  logprob: number;
+}
+
 // API base URL - uses Vite proxy (/api -> localhost:8002)
 const API_BASE_URL = "/api";
 
@@ -188,6 +193,38 @@ export async function continueFromIntervention(
     };
   } catch (error) {
     console.error("Error calling Python API for continuation:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get logprobs for each token in text (calls Python API)
+ */
+export async function getLogprobs(text: string): Promise<TokenLogprob[]> {
+  const url = `${API_BASE_URL}/get-logprobs`;
+  console.log(`[DEBUG] Calling ${url}`);
+
+  const payload = {
+    text: text,
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result.tokens_with_logprobs;
+  } catch (error) {
+    console.error("Error calling Python API for logprobs:", error);
     throw error;
   }
 }

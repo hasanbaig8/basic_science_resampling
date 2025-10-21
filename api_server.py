@@ -72,6 +72,19 @@ class ContinueFromInterventionResponse(BaseModel):
     full_output: str
 
 
+class GetLogprobsRequest(BaseModel):
+    text: str
+
+
+class TokenLogprob(BaseModel):
+    token: str
+    logprob: float
+
+
+class GetLogprobsResponse(BaseModel):
+    tokens_with_logprobs: List[TokenLogprob]
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -193,12 +206,64 @@ async def continue_from_intervention(request: ContinueFromInterventionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to continue generation: {str(e)}")
 
 
+@app.post("/get-logprobs", response_model=GetLogprobsResponse)
+async def get_logprobs(request: GetLogprobsRequest):
+    """
+    Get logprobs for each token in the provided text.
+
+    Returns token-level logprobs for visualization.
+    """
+    print(f"\n[DEBUG] /get-logprobs endpoint called")
+    print(f"[DEBUG] Text length: {len(request.text)}")
+
+    try:
+        import requests as req
+
+        payload = {
+            "model": "Qwen/Qwen3-8b",
+            "prompt": request.text,
+            "max_tokens": 1,
+            "temperature": 0.0,
+            "logprobs": True,
+            "echo": True,
+            "stream": False
+        }
+
+        response = req.post("http://localhost:8000/v1/completions", json=payload)
+        response.raise_for_status()
+        result = response.json()
+
+        # Parse token logprobs
+        tokens_with_logprobs = []
+        prompt_logprobs = result['choices'][0].get('prompt_logprobs', [])
+
+        # Skip first token (usually None)
+        for token_dict in prompt_logprobs[1:]:
+            if token_dict:
+                for token_id, logprob_dict in token_dict.items():
+                    if (len(token_dict) == 1) or (logprob_dict.get('rank') != 1):
+                        tokens_with_logprobs.append(TokenLogprob(
+                            token=logprob_dict['decoded_token'],
+                            logprob=logprob_dict['logprob']
+                        ))
+
+        print(f"[DEBUG] Returning {len(tokens_with_logprobs)} tokens with logprobs")
+        return GetLogprobsResponse(tokens_with_logprobs=tokens_with_logprobs)
+
+    except Exception as e:
+        print(f"[ERROR] Failed to get logprobs: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to get logprobs: {str(e)}")
+
+
 if __name__ == "__main__":
     print("Starting Voice-in-Head Pipeline API server...")
     print("Endpoints:")
     print("  - POST /generate-rollout")
     print("  - POST /generate-interventions")
     print("  - POST /continue-from-intervention")
+    print("  - POST /get-logprobs")
     print("\nServer running on http://localhost:8002")
 
     uvicorn.run(app, host="0.0.0.0", port=8002)
