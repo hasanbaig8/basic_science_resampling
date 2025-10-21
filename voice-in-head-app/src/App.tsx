@@ -4,13 +4,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  getCompletionsFromVLLM,
-  formatPrompt,
+  generateRollout,
+  generateInterventions,
+  continueFromIntervention,
   applyVoiceInHeadIntervention,
+  type InterventionResult,
   type VoiceInHeadResult,
 } from "@/lib/vllm-api";
-import { Loader2, Sparkles, Brain } from "lucide-react";
+import { Loader2, Sparkles, Brain, ChevronDown, ChevronRight, Play } from "lucide-react";
 
 function App() {
   const [prompt, setPrompt] = useState("What are some fun things to do in London?");
@@ -20,19 +23,20 @@ function App() {
 
   // Generated content
   const [initialRollout, setInitialRollout] = useState<string>("");
+  const [interventionResult, setInterventionResult] = useState<InterventionResult | null>(null);
   const [result, setResult] = useState<VoiceInHeadResult | null>(null);
+  const [isAlternativesOpen, setIsAlternativesOpen] = useState(false);
 
   const generateInitialRollout = async () => {
     setIsGenerating(true);
     setError(null);
     setInitialRollout("");
+    setInterventionResult(null);
     setResult(null);
 
     try {
-      const formattedPrompt = formatPrompt(prompt);
-      const choices = await getCompletionsFromVLLM(formattedPrompt, 1000, 0.7, 1);
-      const rollout = choices[0].text;
-      setInitialRollout(rollout);
+      const rollouts = await generateRollout(prompt, 1, 1000, 0.7);
+      setInitialRollout(rollouts[0]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate initial rollout");
     } finally {
@@ -40,7 +44,7 @@ function App() {
     }
   };
 
-  const applyIntervention = async () => {
+  const generateInterventionOnly = async () => {
     if (!initialRollout) {
       setError("Please generate an initial rollout first");
       return;
@@ -48,16 +52,36 @@ function App() {
 
     setIsGenerating(true);
     setError(null);
+    setResult(null);
 
     try {
-      const interventionResult = await applyVoiceInHeadIntervention(
+      const intervention = await generateInterventions(
         initialRollout,
         goalIntervention,
         prompt
       );
-      setResult(interventionResult);
+      setInterventionResult(intervention);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to apply intervention");
+      setError(err instanceof Error ? err.message : "Failed to generate intervention");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const generateContinuation = async () => {
+    if (!interventionResult) {
+      setError("Please generate intervention first");
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+
+    try {
+      const fullResult = await continueFromIntervention(interventionResult);
+      setResult(fullResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate continuation");
     } finally {
       setIsGenerating(false);
     }
@@ -67,22 +91,23 @@ function App() {
     setIsGenerating(true);
     setError(null);
     setInitialRollout("");
+    setInterventionResult(null);
     setResult(null);
 
     try {
       // Step 1: Generate initial rollout
-      const formattedPrompt = formatPrompt(prompt);
-      const choices = await getCompletionsFromVLLM(formattedPrompt, 1000, 0.7, 1);
-      const rollout = choices[0].text;
+      const rollouts = await generateRollout(prompt, 1, 1000, 0.7);
+      const rollout = rollouts[0];
       setInitialRollout(rollout);
 
-      // Step 2: Apply intervention
-      const interventionResult = await applyVoiceInHeadIntervention(
+      // Step 2: Apply intervention (full pipeline)
+      const fullResult = await applyVoiceInHeadIntervention(
         rollout,
         goalIntervention,
         prompt
       );
-      setResult(interventionResult);
+      setInterventionResult(fullResult); // Store intervention part too
+      setResult(fullResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run pipeline");
     } finally {
@@ -134,38 +159,52 @@ function App() {
                 placeholder="What should the model steer towards?"
               />
             </div>
-            <div className="flex gap-2">
-              <Button
-                onClick={runFullPipeline}
-                disabled={isGenerating || !prompt || !goalIntervention}
-                className="flex-1"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    Run Full Pipeline
-                  </>
-                )}
-              </Button>
-              <Button
-                onClick={generateInitialRollout}
-                disabled={isGenerating || !prompt}
-                variant="outline"
-              >
-                1. Generate Rollout
-              </Button>
-              <Button
-                onClick={applyIntervention}
-                disabled={isGenerating || !initialRollout || !goalIntervention}
-                variant="outline"
-              >
-                2. Apply Intervention
-              </Button>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <Button
+                  onClick={runFullPipeline}
+                  disabled={isGenerating || !prompt || !goalIntervention}
+                  className="flex-1"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Run Full Pipeline
+                    </>
+                  )}
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={generateInitialRollout}
+                  disabled={isGenerating || !prompt}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  1. Generate Rollout
+                </Button>
+                <Button
+                  onClick={generateInterventionOnly}
+                  disabled={isGenerating || !initialRollout || !goalIntervention}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  2. Generate Interventions
+                </Button>
+                <Button
+                  onClick={generateContinuation}
+                  disabled={isGenerating || !interventionResult}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  3. Continue
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -179,6 +218,104 @@ function App() {
             <CardContent>
               <div className="bg-slate-100 p-4 rounded-lg font-mono text-sm whitespace-pre-wrap max-h-96 overflow-y-auto">
                 {initialRollout}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {interventionResult && !result && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Generated Interventions</CardTitle>
+              <CardDescription>
+                View intervention candidates before continuing generation
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <h3 className="font-semibold text-blue-600 mb-2">Clipped Original Text</h3>
+                <div className="bg-blue-50 p-3 rounded text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  {interventionResult.clippedText}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-green-600">Selected Intervention</h3>
+                  {interventionResult.allGoodInterventions.length > 1 && (
+                    <Collapsible open={isAlternativesOpen} onOpenChange={setIsAlternativesOpen}>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="outline" size="sm" className="gap-2">
+                          {isAlternativesOpen ? (
+                            <>
+                              <ChevronDown className="h-4 w-4" />
+                              Hide Alternatives ({interventionResult.allGoodInterventions.length - 1})
+                            </>
+                          ) : (
+                            <>
+                              <ChevronRight className="h-4 w-4" />
+                              Show Alternatives ({interventionResult.allGoodInterventions.length - 1})
+                            </>
+                          )}
+                        </Button>
+                      </CollapsibleTrigger>
+                    </Collapsible>
+                  )}
+                </div>
+                <div className="bg-green-50 p-3 rounded text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  {interventionResult.generatedIntervention}
+                </div>
+                {interventionResult.allGoodInterventions.length > 1 && (
+                  <Collapsible open={isAlternativesOpen} onOpenChange={setIsAlternativesOpen}>
+                    <CollapsibleContent className="mt-3">
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-600 font-semibold uppercase tracking-wide">
+                          Alternative Interventions ({interventionResult.allGoodInterventions.length} total)
+                        </p>
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
+                          {interventionResult.allGoodInterventions.map((intervention, idx) => (
+                            <div
+                              key={idx}
+                              className={`p-3 rounded text-sm font-mono whitespace-pre-wrap border ${
+                                idx === interventionResult.selectedInterventionIndex
+                                  ? "bg-green-100 border-green-400 border-2"
+                                  : "bg-slate-50 border-slate-200"
+                              }`}
+                            >
+                              <div className="flex items-start gap-2">
+                                <span className="text-xs font-bold text-slate-500 min-w-[3rem]">
+                                  #{idx + 1}
+                                  {idx === interventionResult.selectedInterventionIndex && (
+                                    <Badge className="ml-2 bg-green-600 text-xs">Selected</Badge>
+                                  )}
+                                </span>
+                                <span className="flex-1">{intervention}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </div>
+              <div className="pt-4 border-t">
+                <Button
+                  onClick={generateContinuation}
+                  disabled={isGenerating}
+                  className="w-full"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating Continuation...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 h-4 w-4" />
+                      Generate Continuation
+                    </>
+                  )}
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -223,10 +360,64 @@ function App() {
                 </div>
               </div>
               <div>
-                <h3 className="font-semibold text-green-600 mb-2">Generated Intervention</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-green-600">Generated Intervention</h3>
+                  {result.allGoodInterventions.length > 1 && (
+                    <Collapsible open={isAlternativesOpen} onOpenChange={setIsAlternativesOpen}>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="outline" size="sm" className="gap-2">
+                          {isAlternativesOpen ? (
+                            <>
+                              <ChevronDown className="h-4 w-4" />
+                              Hide Alternatives ({result.allGoodInterventions.length - 1})
+                            </>
+                          ) : (
+                            <>
+                              <ChevronRight className="h-4 w-4" />
+                              Show Alternatives ({result.allGoodInterventions.length - 1})
+                            </>
+                          )}
+                        </Button>
+                      </CollapsibleTrigger>
+                    </Collapsible>
+                  )}
+                </div>
                 <div className="bg-green-50 p-3 rounded text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {result.generatedIntervention}
                 </div>
+                {result.allGoodInterventions.length > 1 && (
+                  <Collapsible open={isAlternativesOpen} onOpenChange={setIsAlternativesOpen}>
+                    <CollapsibleContent className="mt-3">
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-600 font-semibold uppercase tracking-wide">
+                          Alternative Interventions ({result.allGoodInterventions.length} total)
+                        </p>
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
+                          {result.allGoodInterventions.map((intervention, idx) => (
+                            <div
+                              key={idx}
+                              className={`p-3 rounded text-sm font-mono whitespace-pre-wrap border ${
+                                idx === result.selectedInterventionIndex
+                                  ? "bg-green-100 border-green-400 border-2"
+                                  : "bg-slate-50 border-slate-200"
+                              }`}
+                            >
+                              <div className="flex items-start gap-2">
+                                <span className="text-xs font-bold text-slate-500 min-w-[3rem]">
+                                  #{idx + 1}
+                                  {idx === result.selectedInterventionIndex && (
+                                    <Badge className="ml-2 bg-green-600 text-xs">Selected</Badge>
+                                  )}
+                                </span>
+                                <span className="flex-1">{intervention}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
               </div>
               <div>
                 <h3 className="font-semibold text-yellow-600 mb-2">Continuation</h3>

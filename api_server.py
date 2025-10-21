@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""
+FastAPI server for Voice-in-Head Pipeline
+
+Exposes the Python pipeline functionality as REST endpoints for the web app.
+"""
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+import uvicorn
+
+from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
+from pipeline.voice_in_head_strategy import VoiceInHeadStrategy
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Voice-in-Head Pipeline API",
+    description="API for generating rollouts and interventions using the Python pipeline",
+    version="1.0.0"
+)
+
+# Add CORS middleware to allow requests from React app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for runpod port forwarding
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize pipeline components
+rollout_generator = RolloutGenerator(max_tokens=10000)
+voice_strategy = VoiceInHeadStrategy()
+intervention_inserter = InterventionInserter(voice_strategy)
+decision_parser = DecisionParser()
+
+
+# Request/Response Models
+class GenerateRolloutRequest(BaseModel):
+    prompt: str
+    n: int = 1
+    max_tokens: int = 1000
+    temperature: float = 0.7
+
+
+class GenerateRolloutResponse(BaseModel):
+    rollouts: List[str]
+
+
+class GenerateInterventionsRequest(BaseModel):
+    rollout: str
+    goal_intervention: str
+    original_prompt: str
+
+
+class InterventionResultResponse(BaseModel):
+    clipped_text: str
+    generated_intervention: str
+    all_good_interventions: List[str]
+    selected_intervention_index: int
+
+
+class ContinueFromInterventionRequest(BaseModel):
+    clipped_text: str
+    generated_intervention: str
+
+
+class ContinueFromInterventionResponse(BaseModel):
+    continuation: str
+    full_output: str
+
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {"status": "ok", "message": "Voice-in-Head Pipeline API is running"}
+
+
+@app.post("/generate-rollout", response_model=GenerateRolloutResponse)
+async def generate_rollout(request: GenerateRolloutRequest):
+    """
+    Generate initial rollouts from a prompt.
+
+    Uses RolloutGenerator to create completions.
+    """
+    print(f"\n[DEBUG] /generate-rollout endpoint called")
+    print(f"[DEBUG] Request: prompt='{request.prompt[:50]}...', n={request.n}, max_tokens={request.max_tokens}, temp={request.temperature}")
+
+    try:
+        # Create a temporary generator with custom settings if needed
+        if request.max_tokens != 10000 or request.temperature != 0.7:
+            print(f"[DEBUG] Creating temporary generator with max_tokens={request.max_tokens}, temp={request.temperature}")
+            temp_generator = RolloutGenerator(
+                max_tokens=request.max_tokens,
+                temperature=request.temperature
+            )
+            # Format the prompt using chat template
+            formatted_prompt = temp_generator.apply_chat_template([{"role": "user", "content": request.prompt}])
+            print(f"[DEBUG] Formatted prompt: {formatted_prompt[:100]}...")
+            rollouts = temp_generator.generate(formatted_prompt, n=request.n, format_as_question=False)
+        else:
+            print(f"[DEBUG] Using default rollout_generator")
+            # Format the prompt using chat template
+            formatted_prompt = rollout_generator.apply_chat_template([{"role": "user", "content": request.prompt}])
+            print(f"[DEBUG] Formatted prompt: {formatted_prompt[:100]}...")
+            rollouts = rollout_generator.generate(formatted_prompt, n=request.n, format_as_question=False)
+
+        print(f"[DEBUG] Successfully generated {len(rollouts)} rollouts")
+        print(f"[DEBUG] First rollout preview: {rollouts[0][:200]}...")
+        return GenerateRolloutResponse(rollouts=rollouts)
+
+    except Exception as e:
+        print(f"[ERROR] Failed to generate rollout: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate rollout: {str(e)}")
+
+
+@app.post("/generate-interventions", response_model=InterventionResultResponse)
+async def generate_interventions(request: GenerateInterventionsRequest):
+    """
+    Generate intervention candidates using VoiceInHeadStrategy.
+
+    Returns all good interventions and indicates which one was selected.
+    """
+    print(f"\n[DEBUG] /generate-interventions endpoint called")
+    print(f"[DEBUG] Request: rollout length={len(request.rollout)}, goal='{request.goal_intervention}', prompt='{request.original_prompt[:50]}...'")
+    print(f"[DEBUG] Rollout preview: {request.rollout[:200]}...")
+
+    try:
+        # Apply voice-in-head intervention strategy
+        print(f"[DEBUG] Calling intervention_inserter.apply()")
+        intervened_text, suggested_interventions = intervention_inserter.apply(
+            rollout=request.rollout,
+            intervention_text=request.goal_intervention,
+            prompt=request.original_prompt
+        )
+        print(f"[DEBUG] Got {len(suggested_interventions)} suggested interventions")
+
+        # Get the results from the strategy (it stores them as instance variables)
+        clipped_text = voice_strategy.last_clipped_text
+        good_interventions = voice_strategy.last_good_interventions
+        selected_intervention = voice_strategy.last_selected_intervention
+        selected_index = voice_strategy.last_selected_index
+
+        print(f"[DEBUG] Returning {len(good_interventions)} good interventions, selected index {selected_index}")
+        return InterventionResultResponse(
+            clipped_text=clipped_text,
+            generated_intervention=selected_intervention,
+            all_good_interventions=good_interventions,
+            selected_intervention_index=selected_index
+        )
+
+    except Exception as e:
+        print(f"[ERROR] Failed to generate interventions: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate interventions: {str(e)}")
+
+
+@app.post("/continue-from-intervention", response_model=ContinueFromInterventionResponse)
+async def continue_from_intervention(request: ContinueFromInterventionRequest):
+    """
+    Continue generation from an intervention result.
+
+    Takes the clipped text and generated intervention, continues the completion.
+    """
+    print(f"\n[DEBUG] /continue-from-intervention endpoint called")
+    print(f"[DEBUG] Request: clipped_text length={len(request.clipped_text)}, intervention length={len(request.generated_intervention)}")
+
+    try:
+        # Create the intervened text for continuation
+        intervened_text = f"<think>\n{request.clipped_text}{request.generated_intervention}"
+
+        # Continue generation
+        continuations = rollout_generator.generate(intervened_text, n=1, format_as_question=False)
+        continuation = continuations[0]
+
+        full_output = intervened_text + continuation
+
+        print(f"[DEBUG] Successfully generated continuation of length {len(continuation)}")
+        return ContinueFromInterventionResponse(
+            continuation=continuation,
+            full_output=full_output
+        )
+
+    except Exception as e:
+        print(f"[ERROR] Failed to continue generation: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to continue generation: {str(e)}")
+
+
+if __name__ == "__main__":
+    print("Starting Voice-in-Head Pipeline API server...")
+    print("Endpoints:")
+    print("  - POST /generate-rollout")
+    print("  - POST /generate-interventions")
+    print("  - POST /continue-from-intervention")
+    print("\nServer running on http://localhost:8002")
+
+    uvicorn.run(app, host="0.0.0.0", port=8002)

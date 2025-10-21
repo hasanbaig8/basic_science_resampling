@@ -45,6 +45,27 @@ Default configuration:
 - **Server URL**: `http://localhost:8000`
 - **Endpoints**: Uses `/v1/completions` endpoint
 
+### FastAPI Pipeline Server (for Voice-in-Head App)
+
+The voice-in-head web app uses a FastAPI server that wraps the Python pipeline:
+
+```bash
+# Activate environment
+source .venv/bin/activate
+
+# Start the API server
+python api_server.py
+```
+
+API server configuration:
+- **Server URL**: `http://localhost:8002`
+- **Endpoints**:
+  - `POST /generate-rollout` - Generate initial rollouts
+  - `POST /generate-interventions` - Generate intervention candidates
+  - `POST /continue-from-intervention` - Continue from intervention
+
+**Note**: The web app calls this API server instead of vLLM directly, ensuring single source of truth for intervention logic.
+
 ### Jupyter Notebooks
 
 ```bash
@@ -102,6 +123,7 @@ result = test_significance(control_decisions, intervention_decisions)
 
 **Key Examples**:
 - `example_experiment.ipynb` - Complete walkthrough of a single experiment
+- `voice_in_head_demo.ipynb` - Voice-in-Head strategy demonstration
 - `experiments/1_1_dumb_tf_25_50_75.py` - Batch experiment across multiple questions/positions
 - `pipeline/README.md` - Comprehensive API reference
 
@@ -169,6 +191,10 @@ intervened = inserter.apply(
     intervention_text="Wait, let me reconsider."
 )
 ```
+
+**Available Strategies**:
+- `DirectInsertionStrategy(position_pct)` - Insert at a fixed percentage position (0.25, 0.5, 0.75)
+- `VoiceInHeadStrategy()` - Insert at random early position (15-35%) with LLM-generated steering text
 
 **Extensible**: Easy to add new intervention strategies by subclassing `InterventionStrategy`. Position and other parameters are configured at strategy initialization, not in the `apply()` method.
 
@@ -250,9 +276,9 @@ python generate_rollouts_with_pipeline.py
 
 This generates rollouts for all questions and identifies which ones show variance in their control decisions (i.e., "steerable" questions that are good candidates for intervention experiments). Creates `data/steerable_question_ids.json`.
 
-### Interactive Exploration (Completion Steerer UI)
+### Interactive Exploration UIs
 
-For manual exploration of the completion space (optional):
+**Completion Steerer UI** (`completion-steerer/`) - Manual exploration of completion space:
 
 ```bash
 # Terminal 1: Start vLLM
@@ -267,6 +293,31 @@ npm run dev
 ```
 
 The UI allows selecting from 10 completion candidates at each generation step, with "time travel" to explore alternative branches.
+
+**Voice-in-Head App** (`voice-in-head-app/`) - Interactive testing of Voice-in-Head interventions:
+
+```bash
+# Terminal 1: Start vLLM
+vllm serve Qwen/Qwen3-8b --port 8000
+
+# Terminal 2: Start FastAPI Pipeline Server
+source .venv/bin/activate
+python api_server.py
+
+# Terminal 3: Start UI
+cd voice-in-head-app
+npm install  # First time only
+npm run dev
+
+# Open browser to http://localhost:5174
+```
+
+This app demonstrates the Voice-in-Head strategy with color-coded display:
+- Blue: Clipped original text
+- Green: LLM-generated intervention (steering attempt)
+- Yellow: Final continuation
+
+**Architecture**: The web app calls the FastAPI server (port 8001) which uses the Python pipeline, ensuring no logic duplication.
 
 ## Technical Architecture
 
@@ -293,7 +344,9 @@ Questions → [RolloutGenerator] → Rollouts
 ### Key Design Principles
 
 1. **Unified Generation**: `RolloutGenerator.generate()` works for both initial generation and continuation - it's just the vLLM completions API
-2. **Extensible Interventions**: `InterventionInserter` uses strategy pattern for easy extension
+2. **Extensible Interventions**: `InterventionInserter` uses strategy pattern for easy extension. Available strategies:
+   - `DirectInsertionStrategy` - Fixed position insertion
+   - `VoiceInHeadStrategy` - Random early position (15-35%) with LLM-generated steering
 3. **Clean Separation**: RolloutGenerator and DecisionParser are stable; InterventionInserter evolves with new strategies
 4. **Notebook-First**: All components designed for interactive Jupyter experimentation
 
@@ -340,6 +393,28 @@ npm run lint   # Lint TypeScript
 
 **Architecture**:
 - `src/App.tsx` - Main UI with multi-step completion selection
+- `src/lib/vllm-api.ts` - vLLM API integration
+- `src/components/ui/` - shadcn/ui components
+
+### Voice-in-Head App (`voice-in-head-app/`)
+
+React + TypeScript + Vite application for testing Voice-in-Head interventions.
+
+```bash
+cd voice-in-head-app
+npm run dev    # Development server (port 5174)
+npm run build  # Production build
+npm run lint   # Lint TypeScript
+```
+
+**Features**:
+- Auto-generate initial rollouts from custom prompts
+- Apply voice-in-head interventions at random early positions (15-35%)
+- Color-coded display showing clipped text, intervention, and continuation
+- One-click full pipeline execution
+
+**Architecture**:
+- `src/App.tsx` - Main UI with full pipeline mode
 - `src/lib/vllm-api.ts` - vLLM API integration
 - `src/components/ui/` - shadcn/ui components
 

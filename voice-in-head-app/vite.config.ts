@@ -30,6 +30,14 @@ export default defineConfig({
     host: '0.0.0.0', // Listen on all network interfaces for Runpod
     port: 5174,
     strictPort: true,
+    // Proxy API requests to the Python API server
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8002',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
     // Improve dev server performance
     hmr: {
       overlay: false, // Disable error overlay for faster updates

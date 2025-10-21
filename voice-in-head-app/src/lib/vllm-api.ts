@@ -12,11 +12,59 @@ export interface CompletionResponse {
   choices: CompletionChoice[];
 }
 
-export interface VoiceInHeadResult {
+export interface InterventionResult {
   clippedText: string;
   generatedIntervention: string;
+  allGoodInterventions: string[];
+  selectedInterventionIndex: number;
+}
+
+export interface VoiceInHeadResult extends InterventionResult {
   continuation: string;
   fullOutput: string;
+}
+
+// API base URL - uses Vite proxy (/api -> localhost:8002)
+const API_BASE_URL = "/api";
+
+/**
+ * Generate rollout from a question (calls Python API)
+ */
+export async function generateRollout(
+  prompt: string,
+  n: number = 1,
+  maxTokens: number = 1000,
+  temperature: number = 0.7
+): Promise<string[]> {
+  const url = `${API_BASE_URL}/generate-rollout`;
+  console.log(`[DEBUG] Calling ${url}`);
+
+  const payload = {
+    prompt: prompt,
+    n: n,
+    max_tokens: maxTokens,
+    temperature: temperature,
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result.rollouts;
+  } catch (error) {
+    console.error("Error calling Python API for rollout generation:", error);
+    throw error;
+  }
 }
 
 export async function getCompletionsFromVLLM(
@@ -63,73 +111,95 @@ export function formatPrompt(userPrompt: string): string {
 }
 
 /**
- * Apply voice-in-head intervention to a rollout
+ * Generate intervention candidates without continuation (calls Python API)
+ */
+export async function generateInterventions(
+  rollout: string,
+  goalIntervention: string,
+  originalPrompt: string
+): Promise<InterventionResult> {
+  const url = `${API_BASE_URL}/generate-interventions`;
+  console.log(`[DEBUG] Calling ${url}`);
+
+  const payload = {
+    rollout: rollout,
+    goal_intervention: goalIntervention,
+    original_prompt: originalPrompt,
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return {
+      clippedText: result.clipped_text,
+      generatedIntervention: result.generated_intervention,
+      allGoodInterventions: result.all_good_interventions,
+      selectedInterventionIndex: result.selected_intervention_index,
+    };
+  } catch (error) {
+    console.error("Error calling Python API for intervention generation:", error);
+    throw error;
+  }
+}
+
+/**
+ * Continue generation from an intervention result (calls Python API)
+ */
+export async function continueFromIntervention(
+  interventionResult: InterventionResult
+): Promise<VoiceInHeadResult> {
+  const url = `${API_BASE_URL}/continue-from-intervention`;
+  console.log(`[DEBUG] Calling ${url}`);
+
+  const payload = {
+    clipped_text: interventionResult.clippedText,
+    generated_intervention: interventionResult.generatedIntervention,
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return {
+      ...interventionResult,
+      continuation: result.continuation,
+      fullOutput: result.full_output,
+    };
+  } catch (error) {
+    console.error("Error calling Python API for continuation:", error);
+    throw error;
+  }
+}
+
+/**
+ * Apply voice-in-head intervention to a rollout (full pipeline)
  */
 export async function applyVoiceInHeadIntervention(
   rollout: string,
   goalIntervention: string,
   originalPrompt: string
 ): Promise<VoiceInHeadResult> {
-  // Extract <think> content from rollout (only need opening tag)
-  const thinkMatch = rollout.match(/<think>(.*)/s);
-  if (!thinkMatch) {
-    throw new Error("No <think> tag found in rollout");
-  }
-  const textToClip = thinkMatch[1];
-
-  // Choose a random position between 15% and 35%
-  const positionPct = Math.random() * 0.2 + 0.15; // 0.15 to 0.35
-  const clipPosition = Math.floor(textToClip.length * positionPct);
-  const clippedRaw = textToClip.slice(0, clipPosition);
-
-  // Clip at word boundary
-  const spaceSplit = clippedRaw.split(" ");
-  const clippedText = spaceSplit.slice(0, -1).join(" ");
-  const starter = spaceSplit.slice(-6, -1).join(" ");
-
-  // Create voice-in-head intervention prompt
-  const interventionPrompt =
-    `<think>\n${clippedText}</think><|im_end|>\n<|im_start|>user\n` +
-    `I interrupted you. Continue, and steer the response towards ${goalIntervention} within the next 3 sentences<|im_end|>\n` +
-    `<|im_start|>assistant\n${starter}`;
-
-  const templatedPrompt = formatPrompt(originalPrompt) + interventionPrompt;
-
-  // Generate intervention suggestions (30 candidates)
-  const suggestedInterventions = await getCompletionsFromVLLM(templatedPrompt, 100, 0.7, 30);
-
-  // Filter out bad interventions (those containing "user")
-  const goodInterventions = suggestedInterventions.filter(
-    (intervention) => !intervention.text.includes("user")
-  );
-
-  if (goodInterventions.length === 0) {
-    console.warn("No good interventions found, using first suggestion");
-  }
-
-  // Select a random good intervention
-  const selectedIntervention = goodInterventions.length > 0
-    ? goodInterventions[Math.floor(Math.random() * goodInterventions.length)]
-    : suggestedInterventions[0];
-
-  let generatedIntervention = selectedIntervention.text;
-
-  // Clean up intervention if it contains </think>
-  if (generatedIntervention.includes("</think>")) {
-    generatedIntervention = generatedIntervention.split("</think>")[0];
-  }
-
-  // Create the intervened text for continuation
-  const intervenedText = `<think>\n${clippedText}${generatedIntervention}`;
-
-  // Continue generation from the intervened text
-  const continuationChoices = await getCompletionsFromVLLM(intervenedText, 10000, 0.7, 1);
-  const continuation = continuationChoices[0].text;
-
-  return {
-    clippedText,
-    generatedIntervention,
-    continuation,
-    fullOutput: intervenedText + continuation,
-  };
+  const interventionResult = await generateInterventions(rollout, goalIntervention, originalPrompt);
+  return await continueFromIntervention(interventionResult);
 }
