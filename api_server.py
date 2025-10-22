@@ -8,7 +8,7 @@ Exposes the Python pipeline functionality as REST endpoints for the web app.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List
 import uvicorn
 
 from pipeline import RolloutGenerator, InterventionInserter, DecisionParser
@@ -63,6 +63,7 @@ class InterventionResultResponse(BaseModel):
 
 
 class ContinueFromInterventionRequest(BaseModel):
+    original_prompt: str
     clipped_text: str
     generated_intervention: str
 
@@ -145,7 +146,8 @@ async def generate_interventions(request: GenerateInterventionsRequest):
     try:
         # Apply voice-in-head intervention strategy
         print(f"[DEBUG] Calling intervention_inserter.apply()")
-        intervened_text, suggested_interventions = intervention_inserter.apply(
+        # Note: intervened_text return value not used directly - we retrieve results from voice_strategy instance variables
+        _, suggested_interventions = intervention_inserter.apply(
             rollout=request.rollout,
             intervention_text=request.goal_intervention,
             prompt=request.original_prompt
@@ -178,20 +180,31 @@ async def continue_from_intervention(request: ContinueFromInterventionRequest):
     """
     Continue generation from an intervention result.
 
-    Takes the clipped text and generated intervention, continues the completion.
+    Takes the original prompt, clipped text, and generated intervention, then continues
+    the completion with full context (original question + intervened text).
     """
     print(f"\n[DEBUG] /continue-from-intervention endpoint called")
-    print(f"[DEBUG] Request: clipped_text length={len(request.clipped_text)}, intervention length={len(request.generated_intervention)}")
+    print(f"[DEBUG] Request: prompt='{request.original_prompt[:50]}...', clipped_text length={len(request.clipped_text)}, intervention length={len(request.generated_intervention)}")
 
     try:
-        # Create the intervened text for continuation
+        # Format the original prompt using chat template
+        formatted_prompt = rollout_generator.apply_chat_template([
+            {"role": "user", "content": request.original_prompt}
+        ])
+
+        # Create the intervened text for continuation (partial completion)
         intervened_text = f"<think>\n{request.clipped_text}{request.generated_intervention}"
 
-        # Continue generation
-        continuations = rollout_generator.generate(intervened_text, n=1, format_as_question=False)
+        # Continue generation with full context (formatted_prompt + intervened_text)
+        continuations = rollout_generator.continue_generation(
+            formatted_prompt=formatted_prompt,
+            partial_completion=intervened_text,
+            n=1
+        )
         continuation = continuations[0]
 
-        full_output = intervened_text + continuation
+        # Full output includes the formatted prompt for accurate logprobs visualization
+        full_output = formatted_prompt + intervened_text + continuation
 
         print(f"[DEBUG] Successfully generated continuation of length {len(continuation)}")
         return ContinueFromInterventionResponse(
@@ -240,7 +253,7 @@ async def get_logprobs(request: GetLogprobsRequest):
         # Skip first token (usually None)
         for token_dict in prompt_logprobs[1:]:
             if token_dict:
-                for token_id, logprob_dict in token_dict.items():
+                for _, logprob_dict in token_dict.items():
                     if (len(token_dict) == 1) or (logprob_dict.get('rank') != 1):
                         tokens_with_logprobs.append(TokenLogprob(
                             token=logprob_dict['decoded_token'],

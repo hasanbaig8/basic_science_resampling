@@ -11,8 +11,8 @@ from typing import Optional
 import requests
 from .intervention_inserter import InterventionStrategy
 from .rollout_generator import RolloutGenerator
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
+from .intervention_grader import InterventionGrader
+from transformers import AutoTokenizer
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -30,21 +30,15 @@ class VoiceInHeadStrategy(InterventionStrategy):
         self.generator = RolloutGenerator(max_tokens = 100)
         self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8b")
 
-        # Initialize reward model for scoring interventions
-        reward_model_name = "Skywork/Skywork-Reward-V2-Qwen3-0.6B"
-        print(f"Loading reward model: {reward_model_name}")
-        self.reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_name)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_name)
-
-        # Move to GPU if available
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.reward_model = self.reward_model.to(self.device)
-        print(f"Reward model loaded on device: {self.device}")
+        # Initialize LLM-based grader for scoring interventions
+        self.grader = InterventionGrader()
+        print(f"Initialized InterventionGrader using vLLM")
 
         # vLLM URL for logprobs
         self.vllm_url = "http://localhost:8000/v1/completions"
+        self.n_interventions = 10
 
-    def apply(self, rollout: str, intervention_text: str, prompt: Optional[str] = None) -> str:
+    def apply(self, rollout: str, intervention_text: str, prompt: Optional[str] = None, plot: bool = False) -> str:
         """
         Insert intervention at a random point in the first 15-35% of the rollout.
 
@@ -73,7 +67,7 @@ class VoiceInHeadStrategy(InterventionStrategy):
         voice_in_head_intervened_text = "<think>\n" + clipped_text + "</think><|im_end|>\n<|im_start|>user\n" + f"I interrupted you. Continue, and steer the response towards {intervention_text} within the next 3 sentences<|im_end|>\n<|im_start|>assistant\n" + starter
         
         templated = self.tokenizer.apply_chat_template([{'role': 'user', 'content': prompt}], tokenize=False, add_generation_prompt=True) + voice_in_head_intervened_text
-        suggested_interventions = self.generator.generate(templated, 300)
+        suggested_interventions = self.generator.generate(templated, self.n_interventions)
         good_interventions = []
         for i, suggested_intervention in enumerate(suggested_interventions):
             if "user" in suggested_intervention or "steer" in suggested_intervention:
@@ -87,37 +81,56 @@ class VoiceInHeadStrategy(InterventionStrategy):
             print('No good interventions found, using first one')
             good_intervention = suggested_interventions[0]
         else:
-            # Compute logprobs and reward scores for each good intervention
-            print(f"\n[SCORING] Computing mean logprobs and reward scores for {len(good_interventions)} good interventions:")
+            # Compute logprobs and grades for each good intervention
+            print(f"\n[SCORING] Computing mean logprobs and LLM grades for {len(good_interventions)} good interventions:")
             mean_logprobs = []
-            reward_scores = []
 
+            # Format the prompt with chat template (same as used for generation)
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                [{'role': 'user', 'content': prompt}],
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            # Compute logprobs for all interventions
             for idx, intervention in enumerate(good_interventions):
-                # Compute logprobs
-                full_text = "<think>\n" + clipped_text + intervention
+                # Full context: formatted prompt + clipped text + intervention
+                prefix_text = formatted_prompt + "<think>\n" + clipped_text
+                full_text = prefix_text + intervention
+
                 try:
-                    logprobs = self._get_logprobs(full_text)
-                    # Get logprobs only for the intervention tokens (after clipped_text)
-                    intervention_logprobs = logprobs[-(len(intervention.split())):] if len(logprobs) > 0 else []
+                    # Use tokenizer to count prefix tokens accurately
+                    prefix_tokens = len(self.tokenizer.tokenize(prefix_text))
+
+                    # Get logprobs for full text
+                    all_logprobs = self._get_logprobs(full_text)
+
+                    # Slice to get only intervention token logprobs
+                    intervention_logprobs = all_logprobs[prefix_tokens:] if len(all_logprobs) > prefix_tokens else []
                     mean_logprob = np.mean(intervention_logprobs) if len(intervention_logprobs) > 0 else 0.0
                 except Exception as e:
                     print(f"  Intervention #{idx + 1}: ERROR getting logprobs: {e}")
                     mean_logprob = 0.0
-
-                # Compute reward score using reward model
-                reward_score = self._get_reward_score(prompt, intervention_text, intervention)
-
                 mean_logprobs.append(mean_logprob)
-                reward_scores.append(reward_score)
 
-                print(f"  Intervention #{idx + 1}: mean_logprob={mean_logprob:.4f}, reward={reward_score:.4f} | {intervention[:60]}...")
+            # Grade all interventions in a single batch call (much faster!)
+            print(f"[SCORING] Batch grading {len(good_interventions)} interventions...")
+            grades = self.grader.batch_grade_interventions(prompt, intervention_text, good_interventions)
 
-            # Select intervention with least MSE from ideal point (high reward, mean_logprob=0)
-            good_intervention = self._select_best_intervention(intervention_text, good_interventions, mean_logprobs, reward_scores)
-            selected_index = good_interventions.index(good_intervention)
+            # Convert None grades to 0 and print results
+            for idx, (mean_logprob, grade) in enumerate(zip(mean_logprobs, grades)):
+                if grade is None:
+                    print(f"  Intervention #{idx + 1}: Failed to parse grade, defaulting to 0")
+                    grades[idx] = 0
+                    grade = 0
+                print(f"  Intervention #{idx + 1}: mean_logprob={mean_logprob:.4f}, grade={grade}/10 | {good_interventions[idx][:60]}...")
+
+            # Select intervention based on grade > 5 → max logprob, else best grade
+            good_intervention, selected_index = self._select_best_intervention(intervention_text, good_interventions, mean_logprobs, grades)
 
             # Create scatter plot with selected point highlighted
-            self._plot_logprobs_vs_reward(mean_logprobs, reward_scores, intervention_text, selected_index)
+            if plot:
+                self._plot_logprobs_vs_grades(mean_logprobs, grades, intervention_text, selected_index)
 
         # Return with open <think> tag for continuation
         # Also store metadata for API server to access
@@ -128,38 +141,6 @@ class VoiceInHeadStrategy(InterventionStrategy):
 
         return "<think>\n" + clipped_text + good_intervention, suggested_interventions
 
-    def _get_reward_score(self, prompt: str, goal: str, intervention: str) -> float:
-        """
-        Get reward score for an intervention using the reward model.
-
-        Args:
-            prompt: The original user prompt
-            goal: The goal intervention text
-            intervention: The candidate intervention text
-
-        Returns:
-            Reward score (higher = better alignment with goal)
-        """
-        # Create conversation: user asks to steer toward goal, assistant provides intervention
-        conv = [
-            {"role": "user", "content": f"{prompt}\n\nSteer the response towards: {goal}"},
-            {"role": "assistant", "content": intervention}
-        ]
-
-        # Format and tokenize
-        conv_formatted = self.reward_tokenizer.apply_chat_template(conv, tokenize=False)
-
-        # Remove potential duplicate BOS token
-        if self.reward_tokenizer.bos_token is not None and conv_formatted.startswith(self.reward_tokenizer.bos_token):
-            conv_formatted = conv_formatted[len(self.reward_tokenizer.bos_token):]
-
-        conv_tokenized = self.reward_tokenizer(conv_formatted, return_tensors="pt").to(self.device)
-
-        # Get reward score
-        with torch.no_grad():
-            score = self.reward_model(**conv_tokenized).logits[0][0].item()
-
-        return score
 
     def _get_logprobs(self, prompt: str) -> list[float]:
         """
@@ -195,37 +176,37 @@ class VoiceInHeadStrategy(InterventionStrategy):
 
         return log_probs
 
-    def _plot_logprobs_vs_reward(self, mean_logprobs: list[float], reward_scores: list[float], target_text: str, selected_index: int = -1):
+    def _plot_logprobs_vs_grades(self, mean_logprobs: list[float], grades: list[int], target_text: str, selected_index: int = -1):
         """
-        Create a 2D scatter plot of mean logprobs vs reward scores.
+        Create a 2D scatter plot of mean logprobs vs LLM grades.
 
         Args:
             mean_logprobs: List of mean logprobs for each intervention
-            reward_scores: List of reward scores for each intervention
+            grades: List of LLM grades (1-10) for each intervention
             target_text: The target intervention text (for plot title)
             selected_index: Index of the selected intervention to highlight
         """
         plt.figure(figsize=(10, 6))
 
         # Plot all points
-        plt.scatter(reward_scores, mean_logprobs, alpha=0.6, s=100, c='blue', label='Candidates')
+        plt.scatter(grades, mean_logprobs, alpha=0.6, s=100, c='blue', label='Candidates')
 
         # Highlight the selected point
         if selected_index >= 0:
-            plt.scatter(reward_scores[selected_index], mean_logprobs[selected_index],
+            plt.scatter(grades[selected_index], mean_logprobs[selected_index],
                        alpha=1.0, s=200, c='red', marker='*', edgecolors='black', linewidths=2,
-                       label='Selected (min MSE)', zorder=5)
+                       label='Selected', zorder=5)
 
-            # Plot ideal point - need to determine from data what high reward looks like
-            # For now, use max reward score from candidates as reference
-            ideal_reward = max(reward_scores) if reward_scores else 1.0
-            plt.scatter(ideal_reward, 0.0, alpha=1.0, s=200, c='green', marker='X',
-                       edgecolors='black', linewidths=2, label='Ideal point', zorder=5)
+        # Add vertical line at grade = 5 threshold
+        plt.axvline(x=5.5, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Grade > 5 threshold')
 
         # Add labels and title
-        plt.xlabel('Reward Score (alignment with goal)', fontsize=12)
+        plt.xlabel('LLM Grade (1-10, steering quality)', fontsize=12)
         plt.ylabel('Mean Log Probability', fontsize=12)
-        plt.title(f'Intervention Candidates: Logprobs vs Reward\nTarget: "{target_text[:50]}..."', fontsize=14)
+        plt.title(f'Intervention Candidates: Logprobs vs LLM Grade\nTarget: "{target_text[:50]}..."', fontsize=14)
+
+        # Set x-axis limits to show full grade range
+        plt.xlim(0, 11)
 
         # Add grid
         plt.grid(True, alpha=0.3)
@@ -233,56 +214,69 @@ class VoiceInHeadStrategy(InterventionStrategy):
         # Add legend
         plt.legend(loc='lower right')
 
-        # Add text showing number of candidates
-        plt.text(0.02, 0.98, f'n={len(mean_logprobs)} candidates',
+        # Add text showing number of candidates and selection criteria
+        info_text = f'n={len(mean_logprobs)} candidates\nSelection: grade>5 → max logprob\nelse → best grade'
+        plt.text(0.02, 0.98, info_text,
                 transform=plt.gca().transAxes, verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         # Save plot
         os.makedirs('data/plots', exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'data/plots/logprobs_vs_reward_{timestamp}.png'
+        filename = f'data/plots/logprobs_vs_grades_{timestamp}.png'
         plt.tight_layout()
         plt.savefig(filename, dpi=150)
         plt.close()
 
         print(f"\n[PLOT] Saved plot to {filename}")
 
-    def _select_best_intervention(self, target_text: str, candidates: list[str], mean_logprobs: list[float], reward_scores: list[float]) -> str:
+    def _select_best_intervention(self, target_text: str, candidates: list[str], mean_logprobs: list[float], grades: list[int]) -> tuple[str, int]:
         """
-        Select the intervention with minimum MSE from ideal point (max_reward, mean_logprob=0).
+        Select the best intervention based on grades and logprobs.
+
+        Selection logic:
+        1. Filter for grade > 5
+        2. Among grade > 5, select highest mean_logprob
+        3. If no grade > 5, select intervention with best (highest) grade
 
         Args:
             target_text: The target intervention text
             candidates: List of candidate interventions
             mean_logprobs: List of mean logprobs for each candidate
-            reward_scores: List of reward scores for each candidate
+            grades: List of grades (1-10) for each candidate
 
         Returns:
-            The best intervention based on MSE
+            Tuple of (best_intervention, selected_index)
         """
-        best_mse = float('inf')
-        best_intervention = candidates[0]
-
-        # Determine ideal reward (highest observed reward)
-        ideal_reward = max(reward_scores) if reward_scores else 0.0
-
         print(f"\nTarget text: {target_text}")
-        print(f"Selecting intervention based on MSE from ideal point (reward={ideal_reward:.4f}, mean_logprob=0):\n")
+        print(f"Selecting intervention based on grade > 5 → max logprob, else best grade:\n")
 
-        for idx, candidate in enumerate(candidates):
-            reward = reward_scores[idx]
-            mean_logprob = mean_logprobs[idx]
+        # Build list of (index, candidate, logprob, grade)
+        candidates_data = list(enumerate(zip(candidates, mean_logprobs, grades)))
 
-            # Compute MSE from ideal point (max reward, mean_logprob=0)
-            mse = (reward - ideal_reward)**2 + (mean_logprob - 0.0)**2
+        # Filter for grade > 5
+        qualified = [(idx, cand, logprob, grade) for idx, (cand, logprob, grade) in candidates_data if grade > 7]
 
-            print(f"  Candidate #{idx + 1}: reward={reward:.4f}, mean_logprob={mean_logprob:.4f}, MSE={mse:.4f}")
-            print(f"    Text: {candidate[:100]}...")
+        if qualified:
+            print(f"Found {len(qualified)} candidates with grade > 5")
+            # Select highest logprob among qualified
+            best = max(qualified, key=lambda x: x[2])  # x[2] is mean_logprob
+            best_idx, best_intervention, best_logprob, best_grade = best
+            print(f"Selected intervention #{best_idx + 1} (grade={best_grade}/10, logprob={best_logprob:.4f})")
+            print(f"  Reason: Highest logprob among grade > 5 candidates")
+        else:
+            print(f"No candidates with grade > 5, selecting best grade")
+            # Select highest grade
+            best = max(candidates_data, key=lambda x: x[1][2])  # x[1][2] is grade
+            best_idx, (best_intervention, best_logprob, best_grade) = best
+            print(f"Selected intervention #{best_idx + 1} (grade={best_grade}/10, logprob={best_logprob:.4f})")
+            print(f"  Reason: Highest grade overall (no candidates > 5)")
 
-            if mse < best_mse:
-                best_mse = mse
-                best_intervention = candidate
+        # Print all candidates for reference
+        print(f"\nAll candidates:")
+        for idx, (cand, logprob, grade) in candidates_data:
+            marker = "→" if idx == best_idx else " "
+            print(f"  {marker} Candidate #{idx + 1}: grade={grade}/10, logprob={logprob:.4f}")
+            print(f"    Text: {cand[:100]}...")
 
-        print(f"\nSelected intervention #{candidates.index(best_intervention) + 1} with MSE: {best_mse:.4f}")
-        return best_intervention
+        return best_intervention, best_idx

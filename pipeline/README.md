@@ -449,6 +449,8 @@ A: Experiment with different insertion positions and stronger intervention text.
 
 ## See Also
 
-- `example_experiment.ipynb` - Complete example workflow
+- `archive/example_experiment.ipynb` - Complete example workflow
+- `archive/voice_in_head_demo.ipynb` - Voice-in-Head strategy walkthrough
+- `get_logprobs.ipynb` - Token-level logprobs analysis
 - `intervention_architecture.svg` - Visual architecture diagram
 - `CLAUDE.md` - Overall project documentation

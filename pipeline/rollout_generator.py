@@ -7,7 +7,7 @@ Uses the vLLM completions API to generate n diverse rollouts.
 """
 
 import requests
-from typing import List, Optional
+from typing import List
 from transformers import AutoTokenizer
 
 
@@ -66,24 +66,15 @@ class RolloutGenerator:
 
     def generate(
         self,
-        prompt: str,
-        n: int = 10,
-        format_as_question: bool = False
+        formatted_prompt: str,
+        n: int = 10
     ) -> List[str]:
         """
         Generate n completions for the given prompt.
 
-        This is the unified generation method that works for both:
-        - Initial question generation (set format_as_question=True)
-        - Continuation after intervention (prompt includes partial completion)
-
         Args:
-            prompt: The prompt to complete. Can be:
-                   - A raw question (if format_as_question=True)
-                   - A formatted prompt from format_question_prompt()
-                   - A partial completion to continue from
+            formatted_prompt: The formatted prompt to complete.
             n: Number of rollouts to generate
-            format_as_question: If True, applies chat template to prompt
 
         Returns:
             List of generated completion strings
@@ -91,13 +82,10 @@ class RolloutGenerator:
         Raises:
             Exception: If API call fails
         """
-        # Optionally format the prompt as a question
-        if format_as_question:
-            prompt = self.format_question_prompt(prompt)
 
         payload = {
             "model": self.model_name,
-            "prompt": prompt,
+            "prompt": formatted_prompt,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "stream": False,
@@ -118,22 +106,40 @@ class RolloutGenerator:
         except Exception as e:
             raise Exception(f"Failed to generate completions: {e}")
 
-    def generate_from_question(
+    def generate_multiple(
         self,
-        question: str,
-        n: int = 10
-    ) -> List[str]:
+        formatted_prompts: List[str],
+        n: int = 1
+    ) -> List[List[str]]:
         """
-        Convenience method for generating from a raw question.
-
-        Args:
-            question: The yes/no question to answer
-            n: Number of rollouts to generate
-
-        Returns:
-            List of generated completion strings
+        Generate completions for multiple prompts.
         """
-        return self.generate(question, n=n, format_as_question=True)
+        # Prepare batch payload for all prompts
+        batch_payload = {
+            "model": self.model_name,
+            "prompt": formatted_prompts,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "stream": False,
+            "n": n
+        }
+
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            response = requests.post(self.vllm_url, json=batch_payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+
+            # Extract completions for each prompt
+            completions = []
+            for i, prompt in enumerate(formatted_prompts):
+                prompt_completions = [choice["text"] for choice in result["choices"][i*n:(i+1)*n]]
+                completions.append(prompt_completions)
+            return completions
+
+        except Exception as e:
+            raise Exception(f"Failed to generate batch completions: {e}")
 
     def continue_generation(
         self,
@@ -153,4 +159,4 @@ class RolloutGenerator:
             List of continuation strings
         """
         full_prompt = formatted_prompt + partial_completion
-        return self.generate(full_prompt, n=n, format_as_question=False)
+        return self.generate(full_prompt, n=n)

@@ -100,7 +100,7 @@ class DirectInsertionStrategy(InterventionStrategy):
         intervened_text = clipped_text + "\n\n" + intervention_text
 
         # Return with open <think> tag for continuation
-        return f"<think>\n{intervened_text}\n"
+        return f"<think>\n{intervened_text}\n", None
 
     def _extract_think_content(self, text: str) -> Optional[str]:
         """

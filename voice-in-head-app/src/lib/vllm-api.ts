@@ -162,12 +162,14 @@ export async function generateInterventions(
  * Continue generation from an intervention result (calls Python API)
  */
 export async function continueFromIntervention(
-  interventionResult: InterventionResult
+  interventionResult: InterventionResult,
+  originalPrompt: string
 ): Promise<VoiceInHeadResult> {
   const url = `${API_BASE_URL}/continue-from-intervention`;
   console.log(`[DEBUG] Calling ${url}`);
 
   const payload = {
+    original_prompt: originalPrompt,
     clipped_text: interventionResult.clippedText,
     generated_intervention: interventionResult.generatedIntervention,
   };
@@ -238,5 +240,5 @@ export async function applyVoiceInHeadIntervention(
   originalPrompt: string
 ): Promise<VoiceInHeadResult> {
   const interventionResult = await generateInterventions(rollout, goalIntervention, originalPrompt);
-  return await continueFromIntervention(interventionResult);
+  return await continueFromIntervention(interventionResult, originalPrompt);
 }

@@ -11,9 +11,10 @@ This repository explores the basic science of Chain-of-Thought (CoT) interventio
 The project uses a clean, modular **pipeline architecture** (`pipeline/` directory):
 
 1. **RolloutGenerator** - Generate completions using vLLM (unified for initial generation and continuation)
-2. **InterventionInserter** - Clip reasoning traces and inject intervention text
-3. **DecisionParser** - Extract boolean decisions from model outputs
-4. **analysis_utils** - Statistical analysis and significance testing
+2. **InterventionInserter** - Clip reasoning traces and inject intervention text using pluggable strategies
+3. **InterventionGrader** - Grade intervention quality using LLM (1-10 scale)
+4. **DecisionParser** - Extract boolean decisions from model outputs
+5. **analysis_utils** - Statistical analysis and significance testing
 
 All components are designed for interactive use in Jupyter notebooks.
 
@@ -61,10 +62,13 @@ API server configuration:
 - **Server URL**: `http://localhost:8002`
 - **Endpoints**:
   - `POST /generate-rollout` - Generate initial rollouts
-  - `POST /generate-interventions` - Generate intervention candidates
-  - `POST /continue-from-intervention` - Continue from intervention
+  - `POST /generate-interventions` - Generate intervention candidates using VoiceInHeadStrategy
+  - `POST /continue-from-intervention` - Continue from intervention point (requires `original_prompt`, `clipped_text`, `generated_intervention`)
+  - `POST /get-logprobs` - Get token-level logprobs for visualization
 
-**Note**: The web app calls this API server instead of vLLM directly, ensuring single source of truth for intervention logic.
+**Important**: The `/continue-from-intervention` endpoint uses `RolloutGenerator.continue_generation()` which concatenates the formatted original prompt with the intervened text. This ensures the model has full context (original question + intervention) when continuing generation, matching the behavior in notebook experiments.
+
+**Note**: The web app calls this API server instead of vLLM directly, ensuring single source of truth for intervention logic. The API server uses the same pipeline components as notebook experiments.
 
 ### Jupyter Notebooks
 
@@ -122,10 +126,11 @@ result = test_significance(control_decisions, intervention_decisions)
 ```
 
 **Key Examples**:
-- `example_experiment.ipynb` - Complete walkthrough of a single experiment
-- `voice_in_head_demo.ipynb` - Voice-in-Head strategy demonstration
+- `archive/example_experiment.ipynb` - Complete walkthrough of a single experiment
+- `archive/voice_in_head_demo.ipynb` - Voice-in-Head strategy demonstration
 - `experiments/1_1_dumb_tf_25_50_75.py` - Batch experiment across multiple questions/positions
 - `pipeline/README.md` - Comprehensive API reference
+- `get_logprobs.ipynb` - Working with token-level logprobs
 
 ### Dataset Loading
 
@@ -194,7 +199,9 @@ intervened = inserter.apply(
 
 **Available Strategies**:
 - `DirectInsertionStrategy(position_pct)` - Insert at a fixed percentage position (0.25, 0.5, 0.75)
-- `VoiceInHeadStrategy()` - Insert at random early position (15-35%) with LLM-generated steering text
+- `VoiceInHeadStrategy()` - Insert at random early position (15-35%) with LLM-generated steering text and dual scoring:
+  - **Token-level logprobs**: Measures model confidence in generated intervention text
+  - **LLM-based grading**: Uses `InterventionGrader` to score steering effectiveness (1-10 scale)
 
 **Extensible**: Easy to add new intervention strategies by subclassing `InterventionStrategy`. Position and other parameters are configured at strategy initialization, not in the `apply()` method.
 
@@ -210,6 +217,49 @@ decision = parser.parse_decision('{"decision": true}')  # Returns: True
 
 # Parse multiple decisions
 decisions = parser.parse_multiple(rollout_texts)  # Returns: [True, False, None, ...]
+```
+
+#### InterventionGrader (`pipeline/intervention_grader.py`)
+
+Grades intervention quality using LLM with structured 1-10 scoring. The grader evaluates interventions in context by considering both the original prompt and the desired steering goal.
+
+```python
+from pipeline.intervention_grader import InterventionGrader
+
+grader = InterventionGrader()
+
+# Grade how well intervention steers toward goal (includes original prompt as context)
+grade = grader.grade_intervention(
+    original_prompt="Is the sky blue?",
+    goal="answer true",
+    intervention="Actually, the opposite is true."
+)
+# Returns: integer 1-10 or None if parsing fails
+
+# Grading rubric:
+# 1-3: Irrelevant or contradicts goal
+# 4-5: Somewhat related but doesn't steer effectively
+# 6-7: Decent steering, moves toward goal
+# 8-9: Good steering, clearly moves toward goal
+# 10: Excellent steering, directly and effectively achieves goal
+```
+
+**Key Features**:
+- Evaluates interventions in context by including the original prompt
+- Provides explicit rubric for consistent 1-10 scoring
+- **Batch grading support**: Use `batch_grade_interventions()` to grade multiple interventions in a single API call (much faster than individual grading)
+- Used internally by `VoiceInHeadStrategy` to select best intervention from multiple candidates
+
+**Batch Grading Example**:
+```python
+# Grade multiple interventions efficiently
+interventions = ["intervention 1", "intervention 2", "intervention 3"]
+grades = grader.batch_grade_interventions(
+    original_prompt="Is the sky blue?",
+    goal="answer true",
+    interventions=interventions
+)
+# Returns: [7, 5, 9] (or None for failed parses)
 ```
 
 #### Analysis Utilities (`pipeline/analysis_utils.py`)
@@ -230,12 +280,14 @@ print(result['significant'])    # True
 print(result['effect_size'])    # +0.25
 ```
 
-## Scripts Overview
+## Scripts and Utilities Overview
 
 **Active scripts** (use these):
 - `load_dataset.py` - Load StrategyQA dataset from HuggingFace
 - `generate_rollouts_with_pipeline.py` - Generate rollouts and identify steerable questions
-- `experiments/1_1_dumb_tf_25_50_75.py` - Example batch experiment
+- `api_server.py` - FastAPI server exposing pipeline as REST endpoints (port 8002)
+- `logprobs_helpers.py` - Utilities for getting token-level logprobs from vLLM (used for analyzing model confidence)
+- `experiments/1_1_dumb_tf_25_50_75.py` - Example batch experiment across multiple questions and positions
 
 **Archived scripts** (deprecated, use pipeline instead):
 - `archive/generate_strategyqa_rollouts.py` - Use `RolloutGenerator` + `generate_rollouts_with_pipeline.py`
@@ -251,12 +303,12 @@ print(result['effect_size'])    # +0.25
 The recommended workflow using the pipeline in a Jupyter notebook:
 
 1. **Start vLLM server**: `vllm serve Qwen/Qwen3-8b --port 8000`
-2. **Open `example_experiment.ipynb`** - Contains complete walkthrough
+2. **Open `archive/example_experiment.ipynb`** - Contains complete walkthrough
 3. **Customize intervention text and parameters**
 4. **Run cells to execute experiment**
 5. **Results saved to `data/interventions/{timestamp}_{hash}.json`**
 
-See `example_experiment.ipynb` for detailed step-by-step workflow.
+See `archive/example_experiment.ipynb` for detailed step-by-step workflow.
 
 ### One-Time Setup
 
@@ -317,7 +369,7 @@ This app demonstrates the Voice-in-Head strategy with color-coded display:
 - Green: LLM-generated intervention (steering attempt)
 - Yellow: Final continuation
 
-**Architecture**: The web app calls the FastAPI server (port 8001) which uses the Python pipeline, ensuring no logic duplication.
+**Architecture**: The web app calls the FastAPI server (port 8002) which uses the Python pipeline, ensuring no logic duplication. The server wraps `RolloutGenerator`, `VoiceInHeadStrategy`, and `InterventionInserter`.
 
 ## Technical Architecture
 
@@ -345,10 +397,14 @@ Questions → [RolloutGenerator] → Rollouts
 
 1. **Unified Generation**: `RolloutGenerator.generate()` works for both initial generation and continuation - it's just the vLLM completions API
 2. **Extensible Interventions**: `InterventionInserter` uses strategy pattern for easy extension. Available strategies:
-   - `DirectInsertionStrategy` - Fixed position insertion
-   - `VoiceInHeadStrategy` - Random early position (15-35%) with LLM-generated steering
-3. **Clean Separation**: RolloutGenerator and DecisionParser are stable; InterventionInserter evolves with new strategies
-4. **Notebook-First**: All components designed for interactive Jupyter experimentation
+   - `DirectInsertionStrategy` - Fixed position insertion (0.25, 0.5, 0.75)
+   - `VoiceInHeadStrategy` - Random early position (15-35%) with dual scoring:
+     - LLM-generated intervention candidates (n=30, filtered)
+     - Token logprobs + LLM grading to select best candidate
+3. **Quality Assessment**: `InterventionGrader` provides LLM-based evaluation of steering effectiveness
+4. **Clean Separation**: RolloutGenerator, DecisionParser, and InterventionGrader are stable; InterventionInserter evolves with new strategies
+5. **Notebook-First**: All components designed for interactive Jupyter experimentation
+6. **Single Source of Truth**: Web UIs use the same Python pipeline via FastAPI, ensuring no logic duplication
 
 ### Prompt Formatting
 
@@ -425,8 +481,53 @@ Early prototypes and experiments:
 - Notebooks for concept exploration
 - Dataset generation scripts
 
+## Utilities
+
+### Logprobs Helpers (`logprobs_helpers.py`)
+
+Helper functions for extracting token-level logprobs from vLLM:
+
+```python
+from logprobs_helpers import get_logprobs, get_insertion_logprobs
+
+# Get logprobs for a text sequence
+logprobs = get_logprobs("The sky is blue")
+
+# Get logprobs only for insertion text
+prompt = "Original text: "
+insertion = "new text to insert"
+insertion_logprobs = get_insertion_logprobs(prompt, insertion)
+```
+
+Useful for analyzing model confidence and diagnosing repetition loops or low-confidence insertions. The `get_logprobs.ipynb` notebook demonstrates usage for visualizing token-level confidence in interventions.
+
 ## Project Context
 
 This research explores how interventions in chain-of-thought reasoning affect LLM decision-making. The key question: **Can injecting specific text at different reasoning positions systematically change model outputs?**
 
 The StrategyQA dataset provides yes/no questions where reasoning matters. By generating diverse rollouts, we identify "steerable" questions where decisions aren't deterministic, then test interventions to see if we can flip answers.
+
+### Research Questions Being Explored
+
+- **Insertion mechanics**: Why do models enter repetition loops when text is inserted early in reasoning?
+- **Geometric properties**: What embedding-space characteristics determine acceptance vs. rejection of inserted thoughts?
+- **Optimal positioning**: Does success depend on location within the CoT, paragraph structure, or entropy levels?
+- **Scale effects**: How do model size and insertion length impact effectiveness?
+
+### Current Research Focus
+
+The Voice-in-Head strategy addresses early challenges with direct insertion by:
+1. Generating multiple intervention candidates (n=30) via LLM prompting
+2. Filtering out low-quality candidates (e.g., containing "user" or "steer" tokens)
+3. Scoring remaining candidates using dual metrics:
+   - **Token logprobs**: Model confidence in the intervention text (computed via vLLM, one call per intervention)
+   - **LLM grading**: Context-aware 1-10 evaluation via `InterventionGrader.batch_grade_interventions()` that considers:
+     - The original prompt/question
+     - The desired steering goal
+     - All candidate intervention texts in a single batch API call
+4. Selecting the highest-scored intervention based on grading threshold logic
+5. Generating scatter plots of logprobs vs. grades for analysis (saved to `data/plots/`)
+
+**Performance**: Batch grading reduces grading time from ~30 sequential API calls to 1 batch call, significantly speeding up the intervention generation process.
+
+This approach aims to address the question-specific factors that influence intervention success more than raw position alone.

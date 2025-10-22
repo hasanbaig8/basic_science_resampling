@@ -130,7 +130,7 @@ function App() {
     setTokensWithLogprobs(null);
 
     try {
-      const fullResult = await continueFromIntervention(interventionResult);
+      const fullResult = await continueFromIntervention(interventionResult, prompt);
       setResult(fullResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate continuation");
