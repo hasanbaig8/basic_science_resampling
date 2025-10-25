@@ -1,3 +1,10 @@
 .venv/
+__pycache__/
+*.pyc
 
 data/interventions
+data/activations
+data/train_rollouts.json
+data/test_rollouts.json
+data/*.pt
+data/**/*.pt

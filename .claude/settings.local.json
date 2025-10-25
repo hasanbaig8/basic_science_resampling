@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm install:*)",
       "WebFetch(domain:doc-04-b0-docstext.googleusercontent.com)",
-      "WebFetch(domain:docs.google.com)"
+      "WebFetch(domain:docs.google.com)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

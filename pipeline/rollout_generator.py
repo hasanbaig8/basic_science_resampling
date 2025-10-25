@@ -160,3 +160,21 @@ class RolloutGenerator:
         """
         full_prompt = formatted_prompt + partial_completion
         return self.generate(full_prompt, n=n)
+    
+    def format_prompt(self, question: str) -> str:
+        """
+        Format question using tokenizer's chat template with JSON output instruction.
+
+        Args:
+            question: The question to format
+
+        Returns:
+            Formatted prompt string
+        """
+        user_message = f"""Answer the following yes/no question.
+
+Question: {question}
+
+Provide your final answer as a JSON object: {{"decision": true}} or {{"decision": false}}"""
+
+        return user_message

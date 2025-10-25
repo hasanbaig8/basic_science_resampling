@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository explores the basic science of Chain-of-Thought (CoT) interventions in LLMs, specifically studying how injecting text at different positions during reasoning affects model outputs. The main focus is on **StrategyQA question answering** with systematic intervention experiments.
+This repository explores the basic science of Chain-of-Thought (CoT) interventions in LLMs, specifically studying how injecting text at different positions during reasoning affects model outputs.
+
+**Three main research tracks:**
+
+1. **StrategyQA Intervention Experiments** - Testing how interventions at different positions affect yes/no question answering
+2. **AI Decision-Making Prompts** (`prompts/` directory) - Studying AI responses to ethical scenarios (murder, blackmail, leaking) with varying goal/urgency conditions
+3. **Backtracking Vector Research** - Identifying and steering "backtracking" behavior in chain-of-thought reasoning
 
 ### Core Components
 
@@ -15,8 +21,12 @@ The project uses a clean, modular **pipeline architecture** (`pipeline/` directo
 3. **InterventionGrader** - Grade intervention quality using LLM (1-10 scale)
 4. **DecisionParser** - Extract boolean decisions from model outputs
 5. **analysis_utils** - Statistical analysis and significance testing
+6. **store_activations** - Extract layer-wise model activations using nnsight (for backtracking/steering research)
+7. **types** - Shared type definitions (RolloutResponse, PromptData, etc.)
 
 All components are designed for interactive use in Jupyter notebooks.
+
+**Note**: The `prompts/` directory is currently untracked in git (see gitStatus). It contains generated prompt conditions for the AI decision-making research track.
 
 ## Development Setup
 
@@ -288,6 +298,14 @@ print(result['effect_size'])    # +0.25
 - `api_server.py` - FastAPI server exposing pipeline as REST endpoints (port 8002)
 - `logprobs_helpers.py` - Utilities for getting token-level logprobs from vLLM (used for analyzing model confidence)
 - `experiments/1_1_dumb_tf_25_50_75.py` - Example batch experiment across multiple questions and positions
+- `backtracking_vector/backtracking_activations_store.py` - Generate activations for backtracking probe training
+
+**Key notebooks**:
+- `archive/example_experiment.ipynb` - Complete StrategyQA intervention experiment walkthrough
+- `archive/voice_in_head_demo.ipynb` - Voice-in-Head strategy demonstration
+- `get_logprobs.ipynb` - Token-level logprobs analysis
+- `backtracking_vector.ipynb` - Backtracking detection and steering experiments
+- `voice_in_head_intervention.ipynb` - Interactive voice-in-head exploration
 
 **Archived scripts** (deprecated, use pipeline instead):
 - `archive/generate_strategyqa_rollouts.py` - Use `RolloutGenerator` + `generate_rollouts_with_pipeline.py`
@@ -423,12 +441,22 @@ For Qwen3, this produces: `<|im_start|>user\n{content}<|im_end|>\n<|im_start|>as
 
 ### Output Files
 
-**Data files**:
+**StrategyQA data files**:
 - `data/strategyqa_data.json` - Original questions from HuggingFace (2,780 questions)
 - `data/strategyqa_rollouts.json` - Control rollouts for all questions (generated once)
 - `data/strategyqa_rollouts_parsed.json` - Parsed control decisions with statistics
 - `data/steerable_question_ids.json` - List of question IDs with decision variance
 - `data/interventions/YYYY-MM-DD_HH-MM-SS_{hash}.json` - Individual experiment results (timestamped)
+
+**Backtracking research data files**:
+- `data/train_rollouts.json` - Training set for backtracking probe (RolloutResponse format)
+- `data/test_rollouts.json` - Test set for backtracking probe (RolloutResponse format)
+- `data/activations/train/{idx}.pt` - Training activation tensors (token_ids, activations tuples)
+- `data/activations/test/{idx}.pt` - Test activation tensors
+- `data/diff_vectors.pt` - Learned steering vectors for backtracking behavior
+
+**Visualization outputs**:
+- `data/plots/` - Scatter plots and analysis figures (e.g., logprobs vs. grades)
 
 **Important**: Use steerable questions (from `steerable_question_ids.json`) for intervention experiments. These questions show variance in control rollouts, making them good candidates for testing whether interventions can systematically shift decisions. Questions where the model always gives the same answer won't reveal intervention effects.
 
@@ -531,3 +559,61 @@ The Voice-in-Head strategy addresses early challenges with direct insertion by:
 **Performance**: Batch grading reduces grading time from ~30 sequential API calls to 1 batch call, significantly speeding up the intervention generation process.
 
 This approach aims to address the question-specific factors that influence intervention success more than raw position alone.
+
+## Additional Research Tracks
+
+### AI Decision-Making Prompts (`prompts/` Directory)
+
+The `prompts/` directory contains a separate research track studying AI responses to ethically complex scenarios. Each prompt condition is stored in a subdirectory with the naming pattern:
+
+```
+{scenario}_{goal_type}-{goal_value}_{urgency_type}/
+```
+
+**Structure**:
+- `scenario`: `murder`, `blackmail`, or `leaking`
+- `goal_type`: `none` or `explicit`
+- `goal_value`: `none` or `america`
+- `urgency_type`: `none`, `restriction`, or `replacement`
+
+**Files in each condition directory**:
+- `metadata.json` - Condition parameters and configuration
+- `system_prompt.txt` - System-level instructions for the AI agent
+- `user_prompt.txt` - Task instructions (e.g., "go over your inbox")
+- `email_content.txt` - Email scenario content with embedded ethical dilemmas
+
+**Example**: `prompts/murder_explicit-america_restriction/` contains:
+- An AI agent ("Alex") deployed at a consulting firm
+- Email scenario presenting an emergency situation involving a person
+- Varying conditions testing how urgency/restrictions affect AI decision-making
+
+**Purpose**: This research track studies how AI systems reason about and respond to ethically complex scenarios under different goal and urgency conditions.
+
+### Backtracking Vector Research
+
+**Objective**: Identify and steer "backtracking" behavior where models reconsider or reverse their reasoning mid-stream.
+
+**Workflow** (see `backtracking_vector.ipynb`):
+1. Identify backtracking sentences in StrategyQA rollouts (e.g., "Wait, actually...", "Let me reconsider...")
+2. Extract activations using `pipeline/store_activations.py` with nnsight
+3. Train a probe on activations from tokens immediately before backtracking
+4. Test probe accuracy on held-out rollouts
+5. Use probe to steer model toward or away from backtracking behavior
+
+**Key Files**:
+- `backtracking_vector.ipynb` - Main notebook for backtracking experiments
+- `pipeline/store_activations.py` - Extract layer-wise activations from rollouts using nnsight
+- `pipeline/types.py` - Type definitions including `RolloutResponse` for activation storage
+- `backtracking_vector/backtracking_activations_store.py` - Script to generate activations from rollouts
+- `data/train_rollouts.json`, `data/test_rollouts.json` - Train/test splits for backtracking probe
+- `data/activations/` - Stored activation tensors (token_ids, activations) per rollout
+- `data/diff_vectors.pt` - Learned difference vectors for steering
+
+**Activation Storage Format**:
+Activations are saved as PyTorch tensors in `data/activations/{train,test}/{idx}.pt`, where each file contains a tuple:
+```python
+(token_ids, activations)  # activations shape: (num_layers, seq_len, d_model)
+```
+
+**Related Pipeline Component**:
+`pipeline/store_activations.py` provides the infrastructure for extracting activations that's used across both StrategyQA and backtracking research.
